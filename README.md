@@ -15,6 +15,7 @@ The system intentionally avoids sending every question to all 100 agents. Python
 5. Run verification agents against specialist outputs.
 6. Run critics / risk committee against verified context.
 7. Let A100 CIO synthesize only qualitative judgement fields; Python owns numeric scoring and execution metadata.
+8. Persist the enriched request, source provenance, agent outputs, CIO judgement, and final report when PostgreSQL audit storage is enabled.
 
 This keeps one final answer owner while reducing non-deterministic routing, duplicated evidence, latency, and cost.
 
@@ -31,6 +32,7 @@ This keeps one final answer owner while reducing non-deterministic routing, dupl
 - GitHub Actions CI on Python 3.11 and 3.12.
 - Optional SEC Company Facts enrichment for US equities, filtered strictly by the request `as_of` timestamp.
 - Optional Massive US stock/ETF market-data enrichment with raw OHLCV, dividends, and splits.
+- Optional PostgreSQL audit persistence for requests, sources, agent runs, claims, CIO output, and final reports.
 
 ## Point-in-time market-data policy
 
@@ -44,6 +46,20 @@ The provider therefore stores:
 - splits only after their execution date because the selected split feed does not expose an announcement timestamp.
 
 Corporate actions remain separate from raw prices so a future point-in-time adjustment engine can reconstruct adjusted returns using only information available at each historical timestamp.
+
+## Audit policy
+
+If `DATABASE_URL` is unset, the app uses a no-op audit repository. If `DATABASE_URL` is configured, the analysis endpoint writes the entire research provenance to PostgreSQL **before** returning the report.
+
+Database errors are fail-closed by design: the service does not silently return an unaudited investment report when durable audit storage was explicitly enabled. Reusing the same `request_id` also fails instead of overwriting the original run, preserving immutability.
+
+The PostgreSQL schema stores:
+
+- analysis request metadata;
+- source IDs, source URLs, timestamps, quality scores, and content hashes;
+- each specialist/verifier/critic run and the A100 CIO judgement;
+- facts, analysis claims, risks, invalidators, and direct fact-to-source links where available;
+- the final report JSON.
 
 ## Important limitation
 
@@ -68,7 +84,9 @@ Set `OPENAI_API_KEY` in `.env` or the environment. The app passes it to the Agen
 
 For US-equity SEC enrichment, set `SEC_USER_AGENT` to an application/contact identifier. SEC facts filed after the request `as_of` time are excluded.
 
-For US stock/ETF market enrichment, set `MASSIVE_API_KEY`. `MASSIVE_LOOKBACK_DAYS` defaults to 400 calendar days. If neither data-provider credential is configured, the app stays in passthrough mode.
+For US stock/ETF market enrichment, set `MASSIVE_API_KEY`. `MASSIVE_LOOKBACK_DAYS` defaults to 400 calendar days.
+
+For durable audit storage, set `DATABASE_URL` to a PostgreSQL DSN. The repository initializes `db/schema.sql` lazily on the first persisted analysis.
 
 ## Run
 
@@ -112,6 +130,8 @@ app/
     registry.py
     router.py
     scoring.py
+  persistence/
+    audit.py
   providers/
     base.py
     massive.py
@@ -134,6 +154,7 @@ Request
   -> A81/A82/A83/A89/A90 verification
   -> A91/A92/A94/A98/A99 committee
   -> A100 CIO
+  -> Audit persistence (when configured)
   -> InvestmentReport
 ```
 
@@ -151,15 +172,15 @@ If multiple agents depend on the same `source_id`, their independence weights ar
 
 ## Production next steps
 
-1. Wire `db/schema.sql` through a persistence repository and store immutable request/run/source provenance.
-2. Add EDINET and other non-US primary filing adapters.
-3. Add point-in-time price adjustment / total-return calculations from raw bars + known corporate actions.
-4. Add licensed consensus/news/options providers with source-origin clustering.
-5. Add strict freshness policies per data type.
-6. Add deterministic calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
-7. Add eval datasets and calibration tracking.
-8. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
-9. Add auth, audit logs, secret management, data entitlements, and jurisdiction-aware compliance gates.
+1. Add an EDINET daily filing index and Japanese primary-filing provider.
+2. Add point-in-time price adjustment / total-return calculations from raw bars + known corporate actions.
+3. Add licensed consensus/news/options providers with source-origin clustering.
+4. Add strict freshness policies per data type.
+5. Add deterministic calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
+6. Add eval datasets and calibration tracking.
+7. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
+8. Add auth, secret management, data entitlements, and jurisdiction-aware compliance gates.
+9. Add database migrations/retention policies and production backup/restore procedures.
 10. Separate security research from personalized suitability/position-sizing services.
 
 ## SDK assumptions verified on 2026-10-14

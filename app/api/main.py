@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from agents import set_default_openai_key
 
@@ -6,6 +8,7 @@ from app.domain.schemas import AnalysisRequest, InvestmentReport
 from app.orchestration.engine import InvestmentAnalysisEngine
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter
+from app.persistence.audit import NullAuditRepository, PostgresAuditRepository
 from app.providers.base import CompositeResearchDataProvider, PassthroughDataProvider
 from app.providers.massive import MassiveMarketDataProvider
 from app.providers.sec import SecCompanyFactsProvider
@@ -31,12 +34,31 @@ if settings.massive_api_key:
 provider = CompositeResearchDataProvider(providers) if providers else PassthroughDataProvider()
 engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 
-app = FastAPI(title="Investment AI 100 Agents", version="0.1.0")
+audit_repository = (
+    PostgresAuditRepository(settings.database_url, settings.database_schema_path)
+    if settings.database_url
+    else NullAuditRepository()
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    close = getattr(audit_repository, "close", None)
+    if close is not None:
+        await close()
+
+
+app = FastAPI(title="Investment AI 100 Agents", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
-async def health() -> dict[str, str | int]:
-    return {"status": "ok", "registered_agents": len(registry.specs)}
+async def health() -> dict[str, str | int | bool]:
+    return {
+        "status": "ok",
+        "registered_agents": len(registry.specs),
+        "audit_persistence": bool(settings.database_url),
+    }
 
 
 @app.post("/v1/analyze", response_model=InvestmentReport)
@@ -47,6 +69,13 @@ async def analyze(request: AnalysisRequest) -> InvestmentReport:
             detail="OPENAI_API_KEY is not configured. Data routing can be tested without it, but agent execution cannot.",
         )
     result = await engine.analyze(request)
+    await audit_repository.save(
+        result.request,
+        result.report,
+        result.agent_results,
+        result.route,
+        result.cio_judgement,
+    )
     return result.report
 
 

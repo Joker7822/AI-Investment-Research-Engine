@@ -18,9 +18,11 @@ from app.providers.base import ResearchDataProvider
 
 @dataclass
 class EngineResult:
+    request: AnalysisRequest
     report: InvestmentReport
     agent_results: list[AgentAnalysis]
     route: RoutePlan
+    cio_judgement: CIOJudgement
 
 
 class InvestmentAnalysisEngine:
@@ -172,4 +174,10 @@ class InvestmentAnalysisEngine:
                 caveats=judgement.caveats,
             )
 
-        return EngineResult(report=report, agent_results=pre_cio, route=route)
+        return EngineResult(
+            request=req,
+            report=report,
+            agent_results=pre_cio,
+            route=route,
+            cio_judgement=judgement,
+        )

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     massive_timeout_seconds: float = 15.0
     massive_lookback_days: int = 400
 
+    database_url: str | None = None
+    database_schema_path: str = "db/schema.sql"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
