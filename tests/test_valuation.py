@@ -18,10 +18,11 @@ from app.providers.valuation import (
 )
 
 
-def test_dcf_gordon_growth_is_deterministic():
+def test_dcf_gordon_growth_fcff_is_deterministic():
     scenario = DCFScenarioAssumption(
         name="base",
         currency="USD",
+        cash_flow_basis="fcff",
         base_fcf=Decimal("100"),
         growth_rates=[Decimal("0.10"), Decimal("0.10")],
         wacc=Decimal("0.10"),
@@ -52,10 +53,38 @@ def test_dcf_gordon_growth_is_deterministic():
     assert result["terminal_fcf"] == "123.420000"
     assert result["terminal_value"] == "1542.7500"
     assert result["pv_terminal_value"] == "1275"
+    assert result["value_basis"] == "enterprise"
     assert result["enterprise_value"] == "1475"
     assert result["equity_value"] == "1455"
     assert result["implied_value_per_share"] == "145.5"
+    assert result["assumptions"]["cash_flow_basis"] == "fcff"
+    assert result["assumptions"]["discount_rate_name"] == "wacc"
+    assert result["assumptions"]["applied_discount_rate"] == "0.10"
     assert result["classification"] == "assumption_based_calculation_not_evidence"
+
+
+def test_dcf_fcfe_values_equity_directly_and_uses_cost_of_equity():
+    scenario = DCFScenarioAssumption(
+        name="base",
+        currency="USD",
+        cash_flow_basis="fcfe",
+        base_fcf=Decimal("100"),
+        growth_rates=[Decimal("0.10"), Decimal("0.10")],
+        cost_of_equity=Decimal("0.10"),
+        terminal_growth=Decimal("0.02"),
+        net_debt=Decimal("20"),
+        diluted_shares=Decimal("10"),
+    )
+
+    result = calculate_dcf(scenario)
+
+    assert result["value_basis"] == "equity"
+    assert result["equity_value"] == "1475"
+    assert result["enterprise_value"] == "1495"
+    assert result["implied_value_per_share"] == "147.5"
+    assert result["assumptions"]["discount_rate_name"] == "cost_of_equity"
+    assert result["assumptions"]["applied_discount_rate"] == "0.10"
+    assert "fcfe_values_equity_directly_net_debt_not_subtracted" in result["warnings"]
 
 
 def test_dcf_rejects_wacc_not_above_terminal_growth():
@@ -65,6 +94,42 @@ def test_dcf_rejects_wacc_not_above_terminal_growth():
             base_fcf=Decimal("100"),
             growth_rates=[Decimal("0.05")],
             wacc=Decimal("0.02"),
+            terminal_growth=Decimal("0.02"),
+            diluted_shares=Decimal("10"),
+        )
+
+
+def test_dcf_rejects_mixed_or_missing_discount_rate_basis():
+    with pytest.raises(ValidationError, match="FCFE DCF requires cost_of_equity"):
+        DCFScenarioAssumption(
+            currency="USD",
+            cash_flow_basis="fcfe",
+            base_fcf=Decimal("100"),
+            growth_rates=[Decimal("0.05")],
+            terminal_growth=Decimal("0.02"),
+            diluted_shares=Decimal("10"),
+        )
+
+    with pytest.raises(ValidationError, match="FCFE DCF must not supply wacc"):
+        DCFScenarioAssumption(
+            currency="USD",
+            cash_flow_basis="fcfe",
+            base_fcf=Decimal("100"),
+            growth_rates=[Decimal("0.05")],
+            wacc=Decimal("0.10"),
+            cost_of_equity=Decimal("0.11"),
+            terminal_growth=Decimal("0.02"),
+            diluted_shares=Decimal("10"),
+        )
+
+    with pytest.raises(ValidationError, match="FCFF DCF must not supply cost_of_equity"):
+        DCFScenarioAssumption(
+            currency="USD",
+            cash_flow_basis="fcff",
+            base_fcf=Decimal("100"),
+            growth_rates=[Decimal("0.05")],
+            wacc=Decimal("0.10"),
+            cost_of_equity=Decimal("0.11"),
             terminal_growth=Decimal("0.02"),
             diluted_shares=Decimal("10"),
         )
