@@ -8,17 +8,12 @@ from typing import Any
 
 import asyncpg
 
+from app.metrics.edinet_silver import SilverMetric
 from app.providers.edinet_csv import ParsedEdinetCsvPackage
 
 
 class EdinetIndexRepository:
-    def __init__(
-        self,
-        dsn: str,
-        schema_path: str = "db/schema.sql",
-        min_pool_size: int = 1,
-        max_pool_size: int = 5,
-    ):
+    def __init__(self, dsn: str, schema_path: str = "db/schema.sql", min_pool_size: int = 1, max_pool_size: int = 5):
         if not dsn.strip():
             raise ValueError("PostgreSQL DSN is required")
         self.dsn = dsn
@@ -35,11 +30,7 @@ class EdinetIndexRepository:
             return self._pool
         async with self._pool_lock:
             if self._pool is None:
-                self._pool = await asyncpg.create_pool(
-                    dsn=self.dsn,
-                    min_size=self.min_pool_size,
-                    max_size=self.max_pool_size,
-                )
+                self._pool = await asyncpg.create_pool(dsn=self.dsn, min_size=self.min_pool_size, max_size=self.max_pool_size)
         return self._pool
 
     async def _ensure_schema(self, conn: asyncpg.Connection) -> None:
@@ -61,15 +52,12 @@ class EdinetIndexRepository:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            await conn.execute(
-                """
+            await conn.execute("""
                 INSERT INTO edinet_sync_runs (sync_date, status, document_count, started_at, completed_at, error_text)
                 VALUES ($1, 'running', NULL, now(), NULL, NULL)
                 ON CONFLICT (sync_date) DO UPDATE SET
                     status='running', document_count=NULL, started_at=now(), completed_at=NULL, error_text=NULL
-                """,
-                target_date,
-            )
+            """, target_date)
 
     async def upsert_filings(self, target_date: date, rows: list[dict[str, Any]]) -> None:
         pool = await self._get_pool()
@@ -77,164 +65,138 @@ class EdinetIndexRepository:
             await self._ensure_schema(conn)
             async with conn.transaction():
                 for row in rows:
-                    await conn.execute(
-                        """
+                    await conn.execute("""
                         INSERT INTO edinet_filings (
                             doc_id, filing_date, submitted_at, edinet_code, sec_code, jcn,
                             filer_name, ordinance_code, form_code, doc_type_code,
-                            period_start, period_end, xbrl_flag, csv_flag, pdf_flag,
-                            legal_status, raw_json
-                        ) VALUES (
-                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb
-                        )
+                            period_start, period_end, xbrl_flag, csv_flag, pdf_flag, legal_status, raw_json
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)
                         ON CONFLICT (doc_id) DO UPDATE SET
-                            filing_date=EXCLUDED.filing_date,
-                            submitted_at=EXCLUDED.submitted_at,
-                            edinet_code=EXCLUDED.edinet_code,
-                            sec_code=EXCLUDED.sec_code,
-                            jcn=EXCLUDED.jcn,
-                            filer_name=EXCLUDED.filer_name,
-                            ordinance_code=EXCLUDED.ordinance_code,
-                            form_code=EXCLUDED.form_code,
-                            doc_type_code=EXCLUDED.doc_type_code,
-                            period_start=EXCLUDED.period_start,
-                            period_end=EXCLUDED.period_end,
-                            xbrl_flag=EXCLUDED.xbrl_flag,
-                            csv_flag=EXCLUDED.csv_flag,
-                            pdf_flag=EXCLUDED.pdf_flag,
-                            legal_status=EXCLUDED.legal_status,
-                            raw_json=EXCLUDED.raw_json,
-                            indexed_at=now()
-                        """,
-                        row["doc_id"], target_date, row.get("submitted_at"), row.get("edinet_code"),
-                        row.get("sec_code"), row.get("jcn"), row.get("filer_name"),
-                        row.get("ordinance_code"), row.get("form_code"), row.get("doc_type_code"),
-                        row.get("period_start"), row.get("period_end"), bool(row.get("xbrl_flag")),
-                        bool(row.get("csv_flag")), bool(row.get("pdf_flag")), row.get("legal_status"),
-                        json.dumps(row.get("raw_json", {}), ensure_ascii=False),
-                    )
+                            filing_date=EXCLUDED.filing_date, submitted_at=EXCLUDED.submitted_at,
+                            edinet_code=EXCLUDED.edinet_code, sec_code=EXCLUDED.sec_code, jcn=EXCLUDED.jcn,
+                            filer_name=EXCLUDED.filer_name, ordinance_code=EXCLUDED.ordinance_code,
+                            form_code=EXCLUDED.form_code, doc_type_code=EXCLUDED.doc_type_code,
+                            period_start=EXCLUDED.period_start, period_end=EXCLUDED.period_end,
+                            xbrl_flag=EXCLUDED.xbrl_flag, csv_flag=EXCLUDED.csv_flag,
+                            pdf_flag=EXCLUDED.pdf_flag, legal_status=EXCLUDED.legal_status,
+                            raw_json=EXCLUDED.raw_json, indexed_at=now()
+                    """,
+                    row["doc_id"], target_date, row.get("submitted_at"), row.get("edinet_code"), row.get("sec_code"),
+                    row.get("jcn"), row.get("filer_name"), row.get("ordinance_code"), row.get("form_code"),
+                    row.get("doc_type_code"), row.get("period_start"), row.get("period_end"), bool(row.get("xbrl_flag")),
+                    bool(row.get("csv_flag")), bool(row.get("pdf_flag")), row.get("legal_status"),
+                    json.dumps(row.get("raw_json", {}), ensure_ascii=False))
 
     async def complete_sync(self, target_date: date, document_count: int) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            await conn.execute(
-                """UPDATE edinet_sync_runs
-                   SET status='completed', document_count=$2, completed_at=now(), error_text=NULL
-                   WHERE sync_date=$1""",
-                target_date, document_count,
-            )
+            await conn.execute("UPDATE edinet_sync_runs SET status='completed', document_count=$2, completed_at=now(), error_text=NULL WHERE sync_date=$1", target_date, document_count)
 
     async def fail_sync(self, target_date: date, error_text: str) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            await conn.execute(
-                """
+            await conn.execute("""
                 INSERT INTO edinet_sync_runs (sync_date, status, document_count, completed_at, error_text)
                 VALUES ($1, 'failed', NULL, now(), $2)
-                ON CONFLICT (sync_date) DO UPDATE SET
-                    status='failed', completed_at=now(), error_text=EXCLUDED.error_text
-                """,
-                target_date, error_text[:4000],
-            )
+                ON CONFLICT (sync_date) DO UPDATE SET status='failed', completed_at=now(), error_text=EXCLUDED.error_text
+            """, target_date, error_text[:4000])
 
-    async def latest_for_sec_code(
-        self, sec_code: str, as_of: datetime, limit: int
-    ) -> list[dict[str, Any]]:
+    async def latest_for_sec_code(self, sec_code: str, as_of: datetime, limit: int) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            rows = await conn.fetch(
-                """
+            rows = await conn.fetch("""
                 SELECT doc_id, filing_date, submitted_at, edinet_code, sec_code, jcn,
                        filer_name, ordinance_code, form_code, doc_type_code,
                        period_start, period_end, xbrl_flag, csv_flag, pdf_flag, legal_status
                 FROM edinet_filings
                 WHERE sec_code=$1 AND submitted_at IS NOT NULL AND submitted_at <= $2
-                ORDER BY submitted_at DESC, doc_id DESC
-                LIMIT $3
-                """,
-                sec_code, as_of, limit,
-            )
+                ORDER BY submitted_at DESC, doc_id DESC LIMIT $3
+            """, sec_code, as_of, limit)
         return [dict(row) for row in rows]
 
     async def get_csv_eligible_filing(self, doc_id: str) -> dict[str, Any] | None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            row = await conn.fetchrow(
-                """
-                SELECT doc_id, submitted_at, sec_code, filer_name, doc_type_code,
-                       csv_flag, legal_status
-                FROM edinet_filings
-                WHERE doc_id=$1
-                """,
-                doc_id,
-            )
-        if row is None:
-            return None
-        return dict(row)
+            row = await conn.fetchrow("""
+                SELECT doc_id, submitted_at, sec_code, filer_name, doc_type_code, csv_flag, legal_status
+                FROM edinet_filings WHERE doc_id=$1
+            """, doc_id)
+        return dict(row) if row else None
 
-    async def store_csv_package(
-        self, doc_id: str, package: ParsedEdinetCsvPackage
-    ) -> bool:
-        """Atomically replace one document's Bronze rows; return False if hash unchanged."""
+    async def store_csv_package(self, doc_id: str, package: ParsedEdinetCsvPackage) -> bool:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
             async with conn.transaction():
-                existing = await conn.fetchval(
-                    "SELECT package_sha256 FROM edinet_csv_packages WHERE doc_id=$1 FOR UPDATE",
-                    doc_id,
-                )
+                existing = await conn.fetchval("SELECT package_sha256 FROM edinet_csv_packages WHERE doc_id=$1 FOR UPDATE", doc_id)
                 if existing == package.sha256:
                     return False
-
                 await conn.execute("DELETE FROM edinet_csv_facts WHERE doc_id=$1", doc_id)
-                records = [
-                    (
-                        doc_id, fact.source_file, fact.row_number, fact.element_id,
-                        fact.item_name, fact.context_id, fact.relative_year,
-                        fact.consolidation, fact.period_type, fact.unit_id,
-                        fact.unit_label, fact.value,
-                    )
-                    for fact in package.facts
-                ]
+                records = [(doc_id, f.source_file, f.row_number, f.element_id, f.item_name, f.context_id,
+                            f.relative_year, f.consolidation, f.period_type, f.unit_id, f.unit_label, f.value)
+                           for f in package.facts]
                 if records:
-                    await conn.copy_records_to_table(
-                        "edinet_csv_facts",
-                        records=records,
-                        columns=(
-                            "doc_id", "source_file", "row_number", "element_id",
-                            "item_name", "context_id", "relative_year", "consolidation",
-                            "period_type", "unit_id", "unit_label", "raw_value",
-                        ),
-                    )
-                await conn.execute(
-                    """
-                    INSERT INTO edinet_csv_packages (
-                        doc_id, package_sha256, source_file_count, fact_count, fetched_at
-                    ) VALUES ($1,$2,$3,$4,now())
-                    ON CONFLICT (doc_id) DO UPDATE SET
-                        package_sha256=EXCLUDED.package_sha256,
-                        source_file_count=EXCLUDED.source_file_count,
-                        fact_count=EXCLUDED.fact_count,
-                        fetched_at=now()
-                    """,
-                    doc_id, package.sha256, len(package.files), len(package.facts),
-                )
+                    await conn.copy_records_to_table("edinet_csv_facts", records=records, columns=(
+                        "doc_id", "source_file", "row_number", "element_id", "item_name", "context_id",
+                        "relative_year", "consolidation", "period_type", "unit_id", "unit_label", "raw_value"))
+                await conn.execute("""
+                    INSERT INTO edinet_csv_packages (doc_id, package_sha256, source_file_count, fact_count, fetched_at)
+                    VALUES ($1,$2,$3,$4,now())
+                    ON CONFLICT (doc_id) DO UPDATE SET package_sha256=EXCLUDED.package_sha256,
+                        source_file_count=EXCLUDED.source_file_count, fact_count=EXCLUDED.fact_count, fetched_at=now()
+                """, doc_id, package.sha256, len(package.files), len(package.facts))
         return True
+
+    async def store_silver_metrics(self, doc_id: str, metrics: list[SilverMetric]) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                await conn.execute("DELETE FROM edinet_silver_metrics WHERE doc_id=$1", doc_id)
+                records = [(
+                    doc_id, m.metric_name, m.accounting_standard, m.mapping_version, m.mapping_priority,
+                    m.scope, m.period_key, m.element_id, m.item_name, m.context_id, m.relative_year,
+                    m.period_type, m.unit_id, m.unit_label, m.raw_value, m.numeric_value,
+                    m.source_file, m.row_number,
+                ) for m in metrics]
+                if records:
+                    await conn.copy_records_to_table("edinet_silver_metrics", records=records, columns=(
+                        "doc_id", "metric_name", "accounting_standard", "mapping_version", "mapping_priority",
+                        "scope", "period_key", "element_id", "item_name", "context_id", "relative_year",
+                        "period_type", "unit_id", "unit_label", "raw_value", "numeric_value",
+                        "source_file", "row_number"))
+
+    async def silver_metrics_for_docs(self, doc_ids: list[str]) -> list[dict[str, Any]]:
+        if not doc_ids:
+            return []
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            rows = await conn.fetch("""
+                SELECT doc_id, metric_name, accounting_standard, mapping_version, mapping_priority,
+                       scope, period_key, element_id, item_name, context_id, relative_year,
+                       period_type, unit_id, unit_label, raw_value, numeric_value,
+                       source_file, row_number
+                FROM edinet_silver_metrics
+                WHERE doc_id = ANY($1::text[])
+            """, doc_ids)
+        order = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
+        result = [dict(row) for row in rows]
+        result.sort(key=lambda r: (
+            order.get(r["doc_id"], 10_000), r["metric_name"],
+            0 if r["period_key"] == "CurrentYear" else 1,
+            0 if r["scope"] == "consolidated" else 1,
+            r["mapping_priority"], r["context_id"],
+        ))
+        return result
 
     async def csv_fact_summary(self, doc_id: str) -> dict[str, Any] | None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            row = await conn.fetchrow(
-                """
-                SELECT doc_id, package_sha256, source_file_count, fact_count, fetched_at
-                FROM edinet_csv_packages WHERE doc_id=$1
-                """,
-                doc_id,
-            )
+            row = await conn.fetchrow("SELECT doc_id, package_sha256, source_file_count, fact_count, fetched_at FROM edinet_csv_packages WHERE doc_id=$1", doc_id)
         return dict(row) if row else None
