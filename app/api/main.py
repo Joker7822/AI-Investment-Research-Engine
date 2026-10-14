@@ -10,7 +10,8 @@ from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter
 from app.persistence.audit import NullAuditRepository, PostgresAuditRepository
 from app.persistence.edinet import EdinetIndexRepository
-from app.providers.base import CompositeResearchDataProvider, PassthroughDataProvider
+from app.providers.base import CompositeResearchDataProvider
+from app.providers.derived import DerivedFinancialsProvider
 from app.providers.edinet import EdinetIndexedProvider
 from app.providers.massive import MassiveMarketDataProvider
 from app.providers.sec import SecCompanyFactsProvider
@@ -41,7 +42,10 @@ if settings.massive_api_key:
     )
 if edinet_index_repository is not None:
     providers.append(EdinetIndexedProvider(edinet_index_repository, settings.edinet_index_limit))
-provider = CompositeResearchDataProvider(providers) if providers else PassthroughDataProvider()
+# Pure-Python deterministic calculations always run last. If no compatible
+# primary-source metrics exist, this provider is a no-op.
+providers.append(DerivedFinancialsProvider())
+provider = CompositeResearchDataProvider(providers)
 engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 
 audit_repository = (
