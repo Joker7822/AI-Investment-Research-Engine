@@ -26,7 +26,8 @@ The system intentionally avoids sending every question to all 100 agents. Python
 - Massive US daily raw OHLCV + dividend/split enrichment with point-in-time controls.
 - PostgreSQL immutable audit persistence.
 - EDINET API v2 daily filing index with Japanese-equity `as_of` lookup.
-- EDINET `type=5` XBRL-to-CSV Bronze ingestion: official nine-column UTF-16LE TSV is parsed and stored without semantic remapping.
+- EDINET `type=5` XBRL-to-CSV Bronze ingestion preserving the official nine-column source rows.
+- Deterministic EDINET Silver normalization for 12 core financial metrics across JP GAAP / IFRS / US GAAP starter mappings.
 
 ## Point-in-time market-data policy
 
@@ -62,25 +63,67 @@ For an indexed filing with `csvFlag=1` and a fetchable `legalStatus`, download a
 edinet-csv-sync --doc-id S100XXXX
 ```
 
-The package is fetched with EDINET document API `type=5`. The parser:
+The Bronze parser never extracts ZIP files to disk, accepts only `XBRL_TO_CSV/*.csv`, validates the official nine-column header, decodes UTF-16/UTF-16LE, supports quoted multiline values, imposes archive/row limits, and hashes the package with SHA-256.
 
-- never extracts ZIP files to disk;
-- accepts only `XBRL_TO_CSV/*.csv` members;
-- validates the official nine-column header exactly;
-- decodes UTF-16/UTF-16LE and parses tab-delimited quoted values, including multiline text blocks;
-- applies file-count, per-file, total-uncompressed-size and row-count limits;
-- calculates a SHA-256 for package provenance.
-
-The Bronze table preserves, for every row:
+Every original row is retained with:
 
 ```text
 要素ID / 項目名 / コンテキストID / 相対年度 / 連結・個別 /
 期間・時点 / ユニットID / 単位 / 値
 ```
 
-`edinet_csv_packages` stores package hash/file/fact counts; `edinet_csv_facts` stores the raw canonical rows. If the same `doc_id` and package SHA-256 are synchronized again, no rewrite occurs. Changed packages are replaced atomically using PostgreSQL COPY for the bulk facts.
+### EDINET Silver layer
 
-Semantic metric mapping is intentionally a separate Silver layer. The Bronze parser does **not** guess that a label means revenue/profit/etc.
+`config/edinet_metrics.yaml` is a versioned exact-element mapping. The initial `2026-10-14-v1` map covers:
+
+```text
+revenue
+operating_income
+ordinary_income
+profit_before_tax
+net_income
+total_assets
+net_assets
+eps
+roe_official
+equity_ratio_official
+cf_operating
+cash
+```
+
+The extractor does **not** map by Japanese label similarity or fuzzy regex. It accepts only explicitly configured element IDs and exact annual contexts such as `CurrentYearDuration`, `Prior1YearDuration`, `CurrentYearInstant`, and their `_NonConsolidatedMember` variants. Segment/member contexts are ignored.
+
+Accounting standard is detected separately for JP GAAP, IFRS, and US GAAP. Duration metrics cannot consume instant contexts and vice versa. Consolidated and individual facts remain distinguishable.
+
+Every Silver value retains:
+
+```text
+mapping_version
+accounting_standard
+mapping_priority
+scope
+period_key
+element_id
+context_id
+unit
+raw_value
+numeric_value
+doc_id
+source_file
+row_number
+```
+
+Bronze and Silver are committed in one PostgreSQL transaction. Even if the source ZIP SHA-256 is unchanged, Silver is rebuilt so a mapping-version update can be applied without changing or rewriting the underlying source package.
+
+At analysis time, the newest as-of-safe EDINET filing wins first; within that filing the runtime prefers consolidated scope and then the mapping's explicit element priority. The selected values and full provenance are placed under:
+
+```text
+fundamental_data.edinet.metrics
+```
+
+for A11–A30 and verification agents.
+
+**Current limitation:** issuer-specific extension elements are intentionally not guessed. They remain in Bronze until an auditable explicit mapping is added.
 
 ## Audit policy
 
@@ -100,7 +143,7 @@ Key settings:
 - `OPENAI_API_KEY`: agent execution.
 - `SEC_USER_AGENT`: SEC Company Facts enrichment.
 - `MASSIVE_API_KEY`: US daily market enrichment.
-- `DATABASE_URL`: audit persistence and EDINET index/Bronze storage.
+- `DATABASE_URL`: audit persistence and EDINET index/Bronze/Silver storage.
 - `EDINET_API_KEY`: `edinet-sync` and `edinet-csv-sync` ingestion jobs.
 
 ## Run
@@ -133,6 +176,8 @@ app/
   jobs/
     sync_edinet.py
     sync_edinet_csv.py
+  metrics/
+    edinet_silver.py
   orchestration/
   persistence/
     audit.py
@@ -143,7 +188,9 @@ app/
     edinet_csv.py
     massive.py
     sec.py
-config/agents.yaml
+config/
+  agents.yaml
+  edinet_metrics.yaml
 db/schema.sql
 tests/
 ```
@@ -158,12 +205,12 @@ score × confidence × evidence_quality × source_independence
 
 ## Production next steps
 
-1. Build an EDINET Silver layer that maps official/extension element IDs into auditable Japanese financial metrics without losing Bronze provenance.
-2. Feed normalized EDINET metrics into `fundamental_data` and A11–A30 agents.
-3. Add point-in-time total-return calculations from raw bars + known corporate actions.
-4. Add licensed consensus/news/options providers with source-origin clustering.
-5. Add deterministic DCF/multiple calculation tools and calibration/eval datasets.
-6. Add per-agent budgets, caching, retries, circuit breakers, auth, entitlements, migrations and backup/restore.
+1. Expand the Silver mapping from the 12 core metrics using current EDINET taxonomy lists and explicit issuer-extension mappings with review/versioning.
+2. Add deterministic derived metrics: growth, margins, FCF, ROIC/ROE checks, leverage, and quality flags.
+3. Add deterministic DCF/multiple calculators so valuation agents do not perform arithmetic in free-form text.
+4. Add point-in-time total-return calculations from raw bars + known corporate actions.
+5. Add licensed consensus/news/options providers with source-origin clustering.
+6. Add calibration/eval datasets, per-agent budgets, caching, retries, circuit breakers, auth, entitlements, migrations and backup/restore.
 
 ## SDK assumptions verified on 2026-10-14
 
