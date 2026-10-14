@@ -1,135 +1,131 @@
-# Investment AI — 100-Agent Architecture
+# AI Investment Research Engine — 100-Agent Architecture
 
-A runnable MVP scaffold for a hierarchical investment-research system with **100 registered agent roles** and deterministic orchestration.
+A point-in-time investment research engine with **100 registered specialist roles**, deterministic routing, primary-source evidence, auditable financial normalization, explicit valuation assumptions, and an authenticated REST API.
 
 **Reference date:** 2026-10-14.
 
-## Why this architecture
+## Architecture
 
-The system intentionally avoids sending every question to all 100 agents. Python owns the workflow:
+```text
+Client
+  -> REST API / API-key auth / idempotency
+  -> point-in-time data enrichment
+     -> SEC Company Facts
+     -> EDINET filing index -> type=5 Bronze -> Silver
+     -> raw US market OHLCV / corporate actions
+  -> deterministic derived financials
+  -> explicit-assumption DCF / multiples
+  -> deterministic Router
+  -> bounded parallel specialists
+  -> verification
+  -> Bull / Bear / Thesis Breaker / Evidence Judge / Risk Committee
+  -> A100 CIO
+  -> deterministic scoring
+  -> PostgreSQL audit trail
+  -> InvestmentReport
+```
 
-1. Normalize the request and evidence.
-2. Enrich with configured data providers and enforce point-in-time rules.
-3. Deterministically route to a bounded specialist set.
-4. Run specialists in parallel.
-5. Run verification agents against specialist outputs.
-6. Run critics / risk committee against verified context.
-7. Let A100 CIO synthesize only qualitative judgement fields; Python owns numeric scoring and execution metadata.
-8. Persist the enriched request, source provenance, agent outputs, CIO judgement, and final report when PostgreSQL audit storage is enabled.
+The system intentionally does **not** send every question to all 100 agents. Python owns orchestration, arithmetic, point-in-time filtering, source provenance, and final numeric score aggregation.
 
 ## Current implementation
 
-- A01–A100 agent registry and deterministic routing.
+- A01–A100 agent registry and deterministic rules-first routing.
 - Parallel specialists -> verification -> critics/risk committee -> A100 CIO.
-- Structured outputs, source-independence scoring, tracing, FastAPI, Docker and CI.
+- OpenAI Agents SDK structured outputs and tracing.
+- Evidence-source independence penalty in deterministic score aggregation.
 - SEC Company Facts enrichment for US equities with `as_of` controls.
-- Massive US daily raw OHLCV + dividend/split enrichment with point-in-time controls.
-- PostgreSQL immutable audit persistence.
+- Massive raw US daily OHLCV + dividend/split enrichment with point-in-time controls.
+- PostgreSQL immutable request/report/agent/evidence audit persistence.
+- Public API idempotency using hashed `Idempotency-Key` values.
 - EDINET API v2 daily filing index with Japanese-equity `as_of` lookup.
-- EDINET `type=5` XBRL-to-CSV Bronze ingestion preserving the official nine-column source rows.
+- EDINET `type=5` XBRL-to-CSV Bronze ingestion preserving official source rows.
 - Deterministic EDINET Silver normalization for 12 core financial metrics across JP GAAP / IFRS / US GAAP starter mappings.
+- Ten deterministic derived financial ratios using `Decimal` arithmetic.
+- Explicit-assumption deterministic DCF and valuation-multiple calculators.
+- Authenticated REST API with `X-API-Key`, correlation IDs, Swagger/OpenAPI, and immutable report retrieval.
+- Docker production image, Render Blueprint, pre-deploy migration, readiness checks, and EDINET daily sync.
+- CI on Python 3.11 and 3.12.
 
-## Point-in-time market-data policy
+## Public REST API
 
-Historical bars are requested with `adjusted=false`. Vendor-adjusted historical prices can be restated after later splits/dividends and can contaminate historical backtests with information that was not knowable at the analysis date.
+Primary endpoints:
 
-Raw as-traded OHLCV and corporate actions remain separate. Only completed US sessions are exposed. Dividends require a declaration date already knowable at `as_of` (falling back to ex-date if unavailable); splits are conservatively included only after execution because the selected split feed does not expose an announcement timestamp.
+```text
+POST /v1/research
+POST /v1/valuation
+GET  /v1/reports/{request_id}
+POST /v1/route
+GET  /v1/health
+GET  /v1/ready
+```
 
-## EDINET ingestion policy
+`POST /v1/research` requires durable PostgreSQL audit/idempotency storage and an `Idempotency-Key`. `POST /v1/valuation` performs deterministic valuation only and does not call OpenAI.
 
-The date-oriented EDINET document-list API is synchronized into PostgreSQL rather than scanned repeatedly during user requests:
+See [`docs/public-api.md`](docs/public-api.md).
+
+## Point-in-time policy
+
+Historical market bars are requested with `adjusted=false`. Raw as-traded OHLCV and corporate actions remain separate so later splits/dividends do not silently rewrite historical backtests.
+
+SEC and EDINET facts are filtered by the request's `as_of` timestamp. EDINET runtime lookup enforces `submitted_at <= as_of` in SQL and again in memory.
+
+## EDINET pipeline
 
 ```text
 EDINET /documents.json
   -> edinet-sync
   -> edinet_filings
-  -> secCode + submitted_at <= as_of
-  -> EdinetIndexedProvider
+  -> type=5 ZIP
+  -> edinet_csv_facts (Bronze)
+  -> exact/versioned element mapping
+  -> edinet_silver_metrics (Silver)
+  -> as-of runtime selection
+  -> fundamental_data.edinet.metrics
 ```
 
-Sync one date:
+Sync filing metadata:
 
 ```bash
 edinet-sync --date 2026-10-14
 ```
 
-Japanese four-character security codes are normalized to EDINET's five-character `secCode` convention (`7203` -> `72030`, `607A` -> `607A0`). Runtime enrichment enforces `submitted_at <= as_of` in SQL and again in memory.
-
-### EDINET type=5 Bronze layer
-
-For an indexed filing with `csvFlag=1` and a fetchable `legalStatus`, download and store its XBRL-to-CSV package:
+Fetch one indexed type=5 package:
 
 ```bash
 edinet-csv-sync --doc-id S100XXXX
 ```
 
-The Bronze parser never extracts ZIP files to disk, accepts only `XBRL_TO_CSV/*.csv`, validates the official nine-column header, decodes UTF-16/UTF-16LE, supports quoted multiline values, imposes archive/row limits, and hashes the package with SHA-256.
+The Silver layer uses explicit element IDs and strict annual contexts. Issuer-specific extension elements are not fuzzily guessed; unmatched data remains available in Bronze for review.
 
-Every original row is retained with:
+## Deterministic financial calculations
 
-```text
-要素ID / 項目名 / コンテキストID / 相対年度 / 連結・個別 /
-期間・時点 / ユニットID / 単位 / 値
-```
-
-### EDINET Silver layer
-
-`config/edinet_metrics.yaml` is a versioned exact-element mapping. The initial `2026-10-14-v1` map covers:
+Derived EDINET metrics currently include:
 
 ```text
-revenue
-operating_income
-ordinary_income
-profit_before_tax
-net_income
-total_assets
-net_assets
-eps
-roe_official
-equity_ratio_official
-cf_operating
-cash
+revenue_growth_yoy
+operating_margin
+net_margin
+operating_cash_flow_margin
+asset_growth_yoy
+equity_growth_yoy
+equity_ratio_calculated
+cash_conversion
+roa_calculated
+roe_calculated
 ```
 
-The extractor does **not** map by Japanese label similarity or fuzzy regex. It accepts only explicitly configured element IDs and exact annual contexts such as `CurrentYearDuration`, `Prior1YearDuration`, `CurrentYearInstant`, and their `_NonConsolidatedMember` variants. Segment/member contexts are ignored.
+Calculations refuse to mix incompatible filings, accounting standards, scopes, or units.
 
-Accounting standard is detected separately for JP GAAP, IFRS, and US GAAP. Duration metrics cannot consume instant contexts and vice versa. Consolidated and individual facts remain distinguishable.
+Valuation supports explicit-assumption:
 
-Every Silver value retains:
+- Gordon-growth DCF;
+- equity-value multiples;
+- enterprise-value multiples;
+- optional point-in-time market-price premium/discount comparison.
 
-```text
-mapping_version
-accounting_standard
-mapping_priority
-scope
-period_key
-element_id
-context_id
-unit
-raw_value
-numeric_value
-doc_id
-source_file
-row_number
-```
+The model is not allowed to invent missing WACC, growth, FCF, peer multiple, net debt, or diluted-share assumptions and present them as facts.
 
-Bronze and Silver are committed in one PostgreSQL transaction. Even if the source ZIP SHA-256 is unchanged, Silver is rebuilt so a mapping-version update can be applied without changing or rewriting the underlying source package.
-
-At analysis time, the newest as-of-safe EDINET filing wins first; within that filing the runtime prefers consolidated scope and then the mapping's explicit element priority. The selected values and full provenance are placed under:
-
-```text
-fundamental_data.edinet.metrics
-```
-
-for A11–A30 and verification agents.
-
-**Current limitation:** issuer-specific extension elements are intentionally not guessed. They remain in Bronze until an auditable explicit mapping is added.
-
-## Audit policy
-
-If `DATABASE_URL` is unset, the app uses a no-op audit repository. If configured, the analysis endpoint writes research provenance to PostgreSQL before returning a report. Database errors are fail-closed, and duplicate `request_id` values do not overwrite prior runs.
-
-## Setup
+## Local setup
 
 ```bash
 python -m venv .venv
@@ -138,60 +134,109 @@ pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-Key settings:
+Important settings:
 
 - `OPENAI_API_KEY`: agent execution.
+- `PUBLIC_API_KEY_HASHES`: SHA-256 hashes accepted by `X-API-Key`.
+- `DATABASE_URL`: audit persistence, idempotency, and EDINET storage.
 - `SEC_USER_AGENT`: SEC Company Facts enrichment.
-- `MASSIVE_API_KEY`: US daily market enrichment.
-- `DATABASE_URL`: audit persistence and EDINET index/Bronze/Silver storage.
-- `EDINET_API_KEY`: `edinet-sync` and `edinet-csv-sync` ingestion jobs.
+- `MASSIVE_API_KEY`: US market data.
+- `EDINET_API_KEY`: EDINET ingestion jobs.
 
-## Run
+Generate an API secret and hash:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+python -c "import hashlib; print(hashlib.sha256(b'PASTE_SECRET_HERE').hexdigest())"
+```
+
+## Run locally
+
+```bash
+./scripts/start-api.sh
+```
+
+or:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Route only:
+Health:
+
+```bash
+curl http://localhost:8000/v1/health
+```
+
+Deterministic route preview:
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/route \
   -H 'content-type: application/json' \
+  -H 'X-API-Key: YOUR_SECRET' \
   --data @sample_request.json
 ```
 
-Full analysis:
+Full public research:
 
 ```bash
-curl -s -X POST http://localhost:8000/v1/analyze \
+curl -s -X POST http://localhost:8000/v1/research \
   -H 'content-type: application/json' \
+  -H 'X-API-Key: YOUR_SECRET' \
+  -H 'Idempotency-Key: sample-run-001' \
   --data @sample_request.json
 ```
+
+`POST /v1/analyze` remains as a deprecated compatibility endpoint.
+
+## Production deployment
+
+The root [`render.yaml`](render.yaml) provisions a Singapore-region Docker web service, Render Postgres, and an EDINET daily sync cron job.
+
+Deployment controls include:
+
+- non-root Docker runtime;
+- `$PORT` support;
+- pre-deploy schema migration;
+- `/v1/ready` database/config readiness probe;
+- `autoDeployTrigger: checksPass`;
+- graceful shutdown allowance for long-running research requests;
+- private Postgres ingress;
+- EDINET schedule at `09:30 UTC` (`18:30 JST`).
+
+See [`docs/deployment-render.md`](docs/deployment-render.md) before applying the Blueprint. Review the configured Render compute plans and current pricing first.
+
+## Audit policy
+
+Public research is fail-closed. If PostgreSQL audit/idempotency storage is unavailable, `POST /v1/research` does not silently downgrade to an unaudited run.
+
+The audit trail stores the complete enriched request JSON, source provenance, agent outputs, CIO judgement, valuation assumptions/results, and final report so historical decisions can be reconstructed.
 
 ## Directory layout
 
 ```text
 app/
-  api/main.py
+  api/
   jobs/
+    migrate_db.py
     sync_edinet.py
     sync_edinet_csv.py
   metrics/
-    edinet_silver.py
   orchestration/
   persistence/
-    audit.py
-    edinet.py
   providers/
-    base.py
-    edinet.py
-    edinet_csv.py
-    massive.py
-    sec.py
 config/
   agents.yaml
   edinet_metrics.yaml
-db/schema.sql
+db/
+  schema.sql
+docs/
+  public-api.md
+  deployment-render.md
+scripts/
+  start-api.sh
+render.yaml
+Dockerfile
 tests/
 ```
 
@@ -205,13 +250,15 @@ score × confidence × evidence_quality × source_independence
 
 ## Production next steps
 
-1. Expand the Silver mapping from the 12 core metrics using current EDINET taxonomy lists and explicit issuer-extension mappings with review/versioning.
-2. Add deterministic derived metrics: growth, margins, FCF, ROIC/ROE checks, leverage, and quality flags.
-3. Add deterministic DCF/multiple calculators so valuation agents do not perform arithmetic in free-form text.
-4. Add point-in-time total-return calculations from raw bars + known corporate actions.
-5. Add licensed consensus/news/options providers with source-origin clustering.
-6. Add calibration/eval datasets, per-agent budgets, caching, retries, circuit breakers, auth, entitlements, migrations and backup/restore.
+1. Expand reviewed/versioned EDINET mappings and issuer-extension coverage.
+2. Add point-in-time Japanese market prices and total-return reconstruction.
+3. Add licensed consensus, news, options, short-interest, and estimate-revision providers.
+4. Build WACC/FCF normalization and scenario-generation policies with explicit provenance.
+5. Add backtests, calibration datasets, model/agent scorecards, and regression gates.
+6. Move long research runs to an asynchronous job API when synchronous request duration becomes an operational constraint.
+7. Add rate limits, tenant-level API keys/quotas, billing hooks, secret rotation, migrations, retention policies, and backup/restore drills.
+8. Complete jurisdiction-specific financial-regulatory and suitability review before personalized advice is offered.
 
-## SDK assumptions verified on 2026-10-14
+## SDK assumption
 
-This scaffold targets `openai-agents==0.23.1`. Re-check official SDK documentation before upgrading pinned dependencies.
+The project currently pins `openai-agents==0.23.1`. Re-check official SDK documentation before upgrading dependencies.

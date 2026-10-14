@@ -1,0 +1,66 @@
+services:
+  - type: web
+    name: investment-research-api
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: ./scripts/start-api.sh
+    preDeployCommand: python -m app.jobs.migrate_db
+    healthCheckPath: /v1/ready
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: investment-research-db
+          property: connectionString
+      - key: DATABASE_SCHEMA_PATH
+        value: db/schema.sql
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PUBLIC_API_KEY_HASHES
+        sync: false
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: MASSIVE_API_KEY
+        sync: false
+      - key: MAX_PARALLEL_AGENTS
+        value: "8"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: API_DOCS_ENABLED
+        value: "true"
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
+
+  - type: cron
+    name: investment-research-edinet-sync
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    branch: main
+    schedule: "30 9 * * *"
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: edinet-sync
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: investment-research-db
+          property: connectionString
+      - key: DATABASE_SCHEMA_PATH
+        value: db/schema.sql
+      - key: EDINET_API_KEY
+        sync: false
+
+databases:
+  - name: investment-research-db
+    region: singapore
+    plan: 0.5c-1g
+    postgresMajorVersion: "18"
+    databaseName: investment_research
+    ipAllowList: []
