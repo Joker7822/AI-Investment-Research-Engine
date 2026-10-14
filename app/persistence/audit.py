@@ -5,12 +5,20 @@ import hashlib
 import json
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import asyncpg
 
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport
 from app.orchestration.router import RoutePlan
+
+
+@dataclass(frozen=True)
+class IdempotencyReservation:
+    state: Literal["reserved", "replay", "in_progress", "conflict"]
+    request_id: str | None = None
 
 
 class AuditRepository(ABC):
@@ -37,6 +45,20 @@ class NullAuditRepository(AuditRepository):
     ) -> None:
         return None
 
+    async def get_report(self, request_id: str) -> InvestmentReport | None:
+        return None
+
+    async def reserve_idempotency(
+        self, key_hash: str, request_hash: str, request_id: str
+    ) -> IdempotencyReservation:
+        return IdempotencyReservation("reserved", request_id)
+
+    async def complete_idempotency(self, key_hash: str, request_hash: str) -> None:
+        return None
+
+    async def release_idempotency(self, key_hash: str, request_hash: str) -> None:
+        return None
+
 
 def stage_for_agent(agent_id: str, route: RoutePlan) -> str:
     if agent_id in route.specialists:
@@ -61,12 +83,7 @@ def _hash(value) -> str:
 
 
 class PostgresAuditRepository(AuditRepository):
-    """Persist immutable analysis provenance to PostgreSQL.
-
-    When configured, persistence is intentionally fail-closed: a duplicate request
-    ID or database failure is surfaced instead of silently returning an unaudited
-    investment report.
-    """
+    """Persist immutable analysis provenance and public-API idempotency state."""
 
     def __init__(
         self,
@@ -109,6 +126,102 @@ class PostgresAuditRepository(AuditRepository):
             await self._pool.close()
             self._pool = None
             self._schema_ready = False
+
+    async def get_report(self, request_id: str) -> InvestmentReport | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            payload = await conn.fetchval(
+                "SELECT report_json FROM reports WHERE request_id=$1",
+                request_id,
+            )
+        if payload is None:
+            return None
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return InvestmentReport.model_validate(payload)
+
+    async def reserve_idempotency(
+        self, key_hash: str, request_hash: str, request_id: str
+    ) -> IdempotencyReservation:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO api_idempotency (
+                        key_hash, request_hash, request_id, status
+                    ) VALUES ($1,$2,$3,'running')
+                    ON CONFLICT (key_hash) DO NOTHING
+                    RETURNING key_hash
+                    """,
+                    key_hash,
+                    request_hash,
+                    request_id,
+                )
+                if inserted is not None:
+                    return IdempotencyReservation("reserved", request_id)
+
+                row = await conn.fetchrow(
+                    """
+                    SELECT request_hash, request_id, status
+                    FROM api_idempotency
+                    WHERE key_hash=$1
+                    FOR UPDATE
+                    """,
+                    key_hash,
+                )
+                if row is None:
+                    # Defensive fallback for an unexpected concurrent delete.
+                    return IdempotencyReservation("in_progress", None)
+                if row["request_hash"] != request_hash:
+                    return IdempotencyReservation("conflict", row["request_id"])
+                if row["status"] == "completed":
+                    return IdempotencyReservation("replay", row["request_id"])
+
+                report_exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM reports WHERE request_id=$1)",
+                    row["request_id"],
+                )
+                if report_exists:
+                    await conn.execute(
+                        """
+                        UPDATE api_idempotency
+                        SET status='completed', completed_at=now()
+                        WHERE key_hash=$1
+                        """,
+                        key_hash,
+                    )
+                    return IdempotencyReservation("replay", row["request_id"])
+                return IdempotencyReservation("in_progress", row["request_id"])
+
+    async def complete_idempotency(self, key_hash: str, request_hash: str) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            await conn.execute(
+                """
+                UPDATE api_idempotency
+                SET status='completed', completed_at=now()
+                WHERE key_hash=$1 AND request_hash=$2 AND status='running'
+                """,
+                key_hash,
+                request_hash,
+            )
+
+    async def release_idempotency(self, key_hash: str, request_hash: str) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            await conn.execute(
+                """
+                DELETE FROM api_idempotency
+                WHERE key_hash=$1 AND request_hash=$2 AND status='running'
+                """,
+                key_hash,
+                request_hash,
+            )
 
     async def save(
         self,

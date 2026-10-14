@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     edinet_timeout_seconds: float = 30.0
     edinet_index_limit: int = 8
 
+    api_name: str = "Investment Research API"
+    api_version: str = "1.0.0"
+    # Comma-separated SHA-256 hashes of valid API keys. If blank, auth is disabled
+    # for local development. Production deployments should always configure it.
+    public_api_key_hashes: str | None = None
+    api_docs_enabled: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
