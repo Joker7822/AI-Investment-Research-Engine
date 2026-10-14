@@ -12,24 +12,68 @@ The enriched request, including all assumptions and deterministic results, is pe
 
 ## DCF
 
-The initial DCF uses a Gordon-growth terminal value:
+DCF scenarios must explicitly identify their cash-flow basis.
+
+### FCFF
+
+Free cash flow to the firm is discounted at WACC and produces enterprise value first:
 
 ```text
-FCF_t = FCF_(t-1) × (1 + growth_t)
-PV(FCF_t) = FCF_t / (1 + WACC)^t
-Terminal FCF = final forecast FCF × (1 + terminal growth)
-Terminal Value = Terminal FCF / (WACC - terminal growth)
-Enterprise Value = Σ PV(FCF_t) + PV(Terminal Value)
+FCFF_t = FCFF_(t-1) × (1 + growth_t)
+PV(FCFF_t) = FCFF_t / (1 + WACC)^t
+Terminal FCFF = final forecast FCFF × (1 + terminal growth)
+Terminal Value = Terminal FCFF / (WACC - terminal growth)
+Enterprise Value = Σ PV(FCFF_t) + PV(Terminal Value)
 Equity Value = Enterprise Value - Net Debt
 Implied Value Per Share = Equity Value / Diluted Shares
 ```
 
+Use:
+
+```json
+{
+  "cash_flow_basis": "fcff",
+  "wacc": "0.085"
+}
+```
+
+`cost_of_equity` must not be supplied for an FCFF scenario.
+
+### FCFE
+
+Free cash flow to equity is discounted at cost of equity and produces equity value directly:
+
+```text
+FCFE_t = FCFE_(t-1) × (1 + growth_t)
+PV(FCFE_t) = FCFE_t / (1 + Cost of Equity)^t
+Terminal FCFE = final forecast FCFE × (1 + terminal growth)
+Terminal Value = Terminal FCFE / (Cost of Equity - terminal growth)
+Equity Value = Σ PV(FCFE_t) + PV(Terminal Value)
+Enterprise Value = Equity Value + Net Debt
+Implied Value Per Share = Equity Value / Diluted Shares
+```
+
+Use:
+
+```json
+{
+  "cash_flow_basis": "fcfe",
+  "cost_of_equity": "0.10"
+}
+```
+
+`wacc` must not be supplied for an FCFE scenario. Net debt is **not subtracted** from the FCFE intrinsic value because FCFE already values equity directly. If net debt is supplied, it is used only to derive an informational enterprise value.
+
+For backward compatibility, omitted `cash_flow_basis` defaults to `fcff`; therefore an omitted basis still requires `wacc`.
+
 Validation requires:
 
 - 1–20 explicit forecast growth rates;
-- `WACC > terminal growth`;
-- WACC, terminal growth, and forecast growth greater than -100%;
-- diluted shares > 0.
+- FCFF: `WACC > terminal growth`;
+- FCFE: `cost of equity > terminal growth`;
+- the applicable discount rate, terminal growth, and forecast growth greater than -100%;
+- diluted shares > 0;
+- no mixed WACC/cost-of-equity inputs for the wrong cash-flow basis.
 
 Negative base FCF is mathematically allowed but flagged. Negative net debt is interpreted as net cash and flagged for clarity.
 
@@ -73,8 +117,8 @@ No comparison is emitted for a currency mismatch or missing/invalid price.
 
 ## Audit / replay
 
-The database schema stores the complete enriched request JSON. This is required because a valuation result cannot be reproduced from the final report alone: the exact WACC, growth path, terminal growth, net debt, share count and multiple assumptions must be recoverable.
+The database schema stores the complete enriched request JSON. This is required because a valuation result cannot be reproduced from the final report alone: the exact cash-flow basis, discount rate, growth path, terminal growth, net debt, share count and multiple assumptions must be recoverable.
 
 ## Deliberate limitations
 
-The current calculators do not infer assumptions, calculate WACC, normalize FCF, estimate diluted shares, or select peer multiples. Those remain separate research tasks. The model may discuss supplied assumptions and sensitivity risk, but it must not invent missing assumptions and present them as data.
+The current calculators do not infer assumptions, calculate WACC/cost of equity, normalize FCFF/FCFE, estimate diluted shares, or select peer multiples. Those remain separate research tasks. The model may discuss supplied assumptions and sensitivity risk, but it must not invent missing assumptions and present them as data.
