@@ -84,44 +84,42 @@ def normalize_document(row: dict[str, Any], filing_date: date) -> dict[str, Any]
 
 
 class EdinetApiClient:
-    """Small EDINET API v2 client used by the daily ingestion job."""
+    """Small EDINET API v2 client used by ingestion jobs."""
 
     def __init__(
         self,
         api_key: str,
         timeout_seconds: float = 30.0,
         client: httpx.AsyncClient | None = None,
+        max_download_bytes: int = 128 * 1024 * 1024,
     ):
         if not api_key.strip():
             raise ValueError("EDINET API key is required")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self._client = client
+        self.max_download_bytes = max_download_bytes
+
+    async def _get(self, url: str, params: dict[str, Any]) -> httpx.Response:
+        if self._client is not None:
+            response = await self._client.get(url, params=params, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            return response
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            return response
 
     async def fetch_document_list(self, target_date: date) -> list[dict[str, Any]]:
-        params = {
-            "date": target_date.isoformat(),
-            "type": 2,
-            "Subscription-Key": self.api_key,
-        }
-        if self._client is not None:
-            response = await self._client.get(
-                DOCUMENTS_URL,
-                params=params,
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        else:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    DOCUMENTS_URL,
-                    params=params,
-                    timeout=self.timeout_seconds,
-                )
-                response.raise_for_status()
-                payload = response.json()
-
+        response = await self._get(
+            DOCUMENTS_URL,
+            {
+                "date": target_date.isoformat(),
+                "type": 2,
+                "Subscription-Key": self.api_key,
+            },
+        )
+        payload = response.json()
         results = payload.get("results", []) or []
         normalized: list[dict[str, Any]] = []
         for row in results:
@@ -129,6 +127,26 @@ class EdinetApiClient:
             if item is not None:
                 normalized.append(item)
         return normalized
+
+    async def fetch_csv_package(self, doc_id: str) -> bytes:
+        response = await self._get(
+            DOCUMENT_URL.format(doc_id=doc_id),
+            {"type": 5, "Subscription-Key": self.api_key},
+        )
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.max_download_bytes:
+                    raise ValueError("EDINET CSV package exceeds download-size limit")
+            except ValueError as exc:
+                if "exceeds" in str(exc):
+                    raise
+        payload = response.content
+        if len(payload) > self.max_download_bytes:
+            raise ValueError("EDINET CSV package exceeds download-size limit")
+        if not payload.startswith(b"PK"):
+            raise ValueError("EDINET type=5 response is not a ZIP archive")
+        return payload
 
 
 class EdinetFilingIndex(Protocol):
@@ -167,8 +185,6 @@ class EdinetIndexedProvider(ResearchDataProvider):
 
         sec_code = normalize_sec_code(request.asset.ticker)
         rows = await self.index.latest_for_sec_code(sec_code, as_of, self.limit)
-
-        # Defense in depth: never trust the storage query alone for point-in-time safety.
         safe_rows: list[dict[str, Any]] = []
         for row in rows:
             submitted = parse_edinet_datetime(row.get("submitted_at"))
@@ -227,15 +243,7 @@ class EdinetIndexedProvider(ResearchDataProvider):
                 existing_source_ids.add(source_id)
 
         fundamental_data = dict(request.fundamental_data)
-        fundamental_data["edinet"] = {
-            "sec_code": sec_code,
-            "filings": normalized_for_request,
-        }
-
+        fundamental_data["edinet"] = {"sec_code": sec_code, "filings": normalized_for_request}
         return request.model_copy(
-            update={
-                "filings": filings,
-                "evidence": evidence,
-                "fundamental_data": fundamental_data,
-            }
+            update={"filings": filings, "evidence": evidence, "fundamental_data": fundamental_data}
         )
