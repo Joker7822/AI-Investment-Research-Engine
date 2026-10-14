@@ -62,7 +62,7 @@ class MultipleScenarioAssumption(BaseModel):
     name: str
     currency: str
     metric_name: str
-    metric_value: Decimal
+    metric_value: Decimal = Field(gt=0)
     multiple: Decimal = Field(gt=0)
     basis: Literal["equity", "enterprise"]
     net_debt: Decimal = Decimal("0")
@@ -72,6 +72,16 @@ class MultipleScenarioAssumption(BaseModel):
 class ValuationAssumptions(BaseModel):
     dcf: list[DCFScenarioAssumption] = Field(default_factory=list, max_length=10)
     multiples: list[MultipleScenarioAssumption] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def unique_scenario_names(self) -> "ValuationAssumptions":
+        dcf_names = [scenario.name for scenario in self.dcf]
+        multiple_names = [scenario.name for scenario in self.multiples]
+        if len(dcf_names) != len(set(dcf_names)):
+            raise ValueError("DCF scenario names must be unique")
+        if len(multiple_names) != len(set(multiple_names)):
+            raise ValueError("multiple scenario names must be unique")
+        return self
 
 
 class AnalysisRequest(BaseModel):
