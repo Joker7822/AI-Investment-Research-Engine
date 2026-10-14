@@ -36,13 +36,11 @@ async def sync(doc_id: str) -> dict[str, object]:
 
         payload = await client.fetch_csv_package(doc_id)
         parsed = parse_edinet_csv_package(payload)
-        changed = await repository.store_csv_package(doc_id, parsed)
-
         mapping_version, accounting_standard, silver = extract_silver_metrics(parsed.facts)
-        await repository.store_silver_metrics(doc_id, silver)
+        changed = await repository.store_csv_and_silver(doc_id, parsed, silver)
 
         result = {
-            "status": "stored" if changed else "unchanged",
+            "status": "stored" if changed else "unchanged_source_rebuilt_silver",
             "doc_id": doc_id,
             "sha256": parsed.sha256,
             "files": len(parsed.files),
@@ -59,7 +57,7 @@ async def sync(doc_id: str) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch one EDINET type=5 package and rebuild Bronze + deterministic Silver metrics"
+        description="Fetch one EDINET type=5 package and atomically rebuild Bronze + deterministic Silver metrics"
     )
     parser.add_argument("--doc-id", required=True, help="EDINET document ID, e.g. S100XXXX")
     args = parser.parse_args()
