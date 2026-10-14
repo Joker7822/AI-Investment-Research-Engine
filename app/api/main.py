@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from agents import set_default_openai_key
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -69,7 +70,6 @@ providers.append(ValuationCalculationProvider())
 provider = CompositeResearchDataProvider(providers)
 engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 
-# Deterministic valuation-only endpoint: market price may be enriched, but no LLM runs.
 valuation_providers = []
 if settings.massive_api_key:
     valuation_providers.append(
@@ -168,7 +168,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             request,
             code="validation_error",
             message="Request validation failed",
-            details=exc.errors(),
+            details=jsonable_encoder(exc.errors()),
+        ),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=_error_payload(
+            request,
+            code="internal_error",
+            message="The request could not be completed",
         ),
     )
 
