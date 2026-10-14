@@ -105,7 +105,6 @@ CREATE TABLE IF NOT EXISTS edinet_sync_runs (
     error_text TEXT
 );
 
--- Bronze layer: immutable provenance for the official type=5 XBRL-to-CSV ZIP.
 CREATE TABLE IF NOT EXISTS edinet_csv_packages (
     doc_id TEXT PRIMARY KEY REFERENCES edinet_filings(doc_id) ON DELETE CASCADE,
     package_sha256 TEXT NOT NULL,
@@ -133,3 +132,32 @@ CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_element ON edinet_csv_facts(doc_
 CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_context ON edinet_csv_facts(doc_id, context_id);
 CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_lookup
     ON edinet_csv_facts(element_id, relative_year, consolidation, period_type);
+
+-- Silver layer: deterministic exact-element mappings derived from Bronze facts.
+-- Every metric retains a direct pointer to the original CSV source row.
+CREATE TABLE IF NOT EXISTS edinet_silver_metrics (
+    doc_id TEXT NOT NULL REFERENCES edinet_filings(doc_id) ON DELETE CASCADE,
+    metric_name TEXT NOT NULL,
+    accounting_standard TEXT NOT NULL CHECK (accounting_standard IN ('jp_gaap','ifrs','us_gaap')),
+    mapping_version TEXT NOT NULL,
+    mapping_priority INTEGER NOT NULL CHECK (mapping_priority >= 0),
+    scope TEXT NOT NULL CHECK (scope IN ('consolidated','individual')),
+    period_key TEXT NOT NULL,
+    element_id TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    relative_year TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    unit_label TEXT NOT NULL,
+    raw_value TEXT NOT NULL,
+    numeric_value NUMERIC,
+    source_file TEXT NOT NULL,
+    row_number INTEGER NOT NULL CHECK (row_number >= 2),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (doc_id, metric_name, source_file, row_number)
+);
+CREATE INDEX IF NOT EXISTS idx_edinet_silver_doc_metric
+    ON edinet_silver_metrics(doc_id, metric_name, period_key, scope, mapping_priority);
+CREATE INDEX IF NOT EXISTS idx_edinet_silver_element
+    ON edinet_silver_metrics(element_id, accounting_standard);
