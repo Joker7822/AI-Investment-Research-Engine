@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS analysis_requests (
     request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Compatibility for databases initialized before request_json was introduced.
 ALTER TABLE analysis_requests
     ADD COLUMN IF NOT EXISTS request_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
@@ -75,6 +74,18 @@ CREATE TABLE IF NOT EXISTS reports (
     report_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Public API idempotency ledger. Only SHA-256 hashes of client keys are stored.
+CREATE TABLE IF NOT EXISTS api_idempotency (
+    key_hash TEXT PRIMARY KEY,
+    request_hash TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running','completed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_api_idempotency_request
+    ON api_idempotency(request_id);
 
 CREATE TABLE IF NOT EXISTS edinet_filings (
     doc_id TEXT PRIMARY KEY,
