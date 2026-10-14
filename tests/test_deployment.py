@@ -6,6 +6,19 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
+def test_root_landing_explains_api_entrypoints():
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["links"]["health"] == "/v1/health"
+    assert body["links"]["readiness"] == "/v1/ready"
+    assert body["links"]["docs"] == "/docs"
+    assert body["endpoints"]["research"] == "POST /v1/research"
+    assert body["endpoints"]["valuation"] == "POST /v1/valuation"
+
+
 def test_readiness_fails_closed_without_production_secrets():
     client = TestClient(app)
     response = client.get("/v1/ready")
