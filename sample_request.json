@@ -1,0 +1,21 @@
+{
+  "as_of": "2026-10-14T16:22:00+09:00",
+  "asset": {
+    "type": "equity",
+    "ticker": "EXAMPLE",
+    "exchange": "NASDAQ",
+    "currency": "USD",
+    "region": "US",
+    "sector": "technology"
+  },
+  "user_question": "Analyze the investment case over the next 12 months.",
+  "investment_horizon": "12m",
+  "analysis_types": ["fundamental", "valuation", "risk", "scenario"],
+  "portfolio_specific": false,
+  "risk_profile_available": false,
+  "evidence": [],
+  "market_data": {},
+  "fundamental_data": {},
+  "filings": [],
+  "news": []
+}
