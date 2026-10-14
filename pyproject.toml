@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 edinet-sync = "app.jobs.sync_edinet:main"
+edinet-csv-sync = "app.jobs.sync_edinet_csv:main"
 
 [project.optional-dependencies]
 dev = [
