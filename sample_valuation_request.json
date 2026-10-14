@@ -1,0 +1,39 @@
+{
+  "as_of": "2026-10-14T15:00:00+09:00",
+  "asset": {
+    "type": "equity",
+    "ticker": "AAPL",
+    "exchange": "NASDAQ",
+    "currency": "USD",
+    "region": "US"
+  },
+  "user_question": "Analyze the valuation under these explicit scenarios",
+  "investment_horizon": "12m",
+  "analysis_types": ["fundamental", "valuation", "risk"],
+  "valuation_assumptions": {
+    "dcf": [
+      {
+        "name": "base",
+        "currency": "USD",
+        "base_fcf": "100000000000",
+        "growth_rates": ["0.08", "0.07", "0.06", "0.05", "0.04"],
+        "wacc": "0.085",
+        "terminal_growth": "0.025",
+        "net_debt": "-30000000000",
+        "diluted_shares": "15000000000"
+      }
+    ],
+    "multiples": [
+      {
+        "name": "earnings_25x",
+        "currency": "USD",
+        "metric_name": "normalized_earnings",
+        "metric_value": "110000000000",
+        "multiple": "25",
+        "basis": "equity",
+        "net_debt": "-30000000000",
+        "diluted_shares": "15000000000"
+      }
+    ]
+  }
+}

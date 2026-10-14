@@ -14,6 +14,7 @@ ABSOLUTE RULES
 10. Do not issue an order to buy or sell.
 11. Return only the structured output requested by the runtime schema.
 12. The analysis date is {as_of}; never silently use future information.
+13. valuation_assumptions and valuation_calculations are explicit scenario assumptions and deterministic calculations, not observed evidence. Never invent missing valuation assumptions, never attach source_ids to an assumption unless independently supplied as evidence, and state sensitivity/assumption risk in analysis when using them.
 
 AGENT ID: {agent_id}
 DEPARTMENT: {department}
@@ -29,6 +30,7 @@ Do not introduce new factual claims.
 Resolve disagreements by evidence quality, confidence, source independence, and relevance.
 If evidence is insufficient or stale, lower confidence and state the limitation.
 Never fabricate a price target, probability, or source.
+Treat any valuation result based on explicit assumptions as a scenario result, not observed evidence.
 Do not generate numeric scores, confidence values, source IDs, or execution metadata; Python computes them deterministically.
 Return only the requested CIOJudgement schema.
 """.strip()

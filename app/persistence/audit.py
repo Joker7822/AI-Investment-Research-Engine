@@ -125,12 +125,13 @@ class PostgresAuditRepository(AuditRepository):
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
             async with conn.transaction():
+                request_json = _json(request)
                 await conn.execute(
                     """
                     INSERT INTO analysis_requests (
                         request_id, as_of, asset_type, ticker, exchange, currency,
-                        user_question, investment_horizon
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                        user_question, investment_horizon, request_json
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
                     """,
                     request.request_id,
                     request.as_of,
@@ -140,6 +141,7 @@ class PostgresAuditRepository(AuditRepository):
                     request.asset.currency,
                     request.user_question,
                     request.investment_horizon,
+                    request_json,
                 )
 
                 known_sources: set[str] = set()
@@ -162,12 +164,10 @@ class PostgresAuditRepository(AuditRepository):
                     )
                     known_sources.add(source.source_id)
 
-                request_hash = _hash(request)
-                run_ids: dict[str, uuid.UUID] = {}
+                request_hash = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
 
                 for result in agent_results:
                     run_id = uuid.uuid4()
-                    run_ids[result.agent_id] = run_id
                     await conn.execute(
                         """
                         INSERT INTO agent_runs (

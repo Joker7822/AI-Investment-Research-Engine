@@ -15,6 +15,7 @@ from app.providers.derived import DerivedFinancialsProvider
 from app.providers.edinet import EdinetIndexedProvider
 from app.providers.massive import MassiveMarketDataProvider
 from app.providers.sec import SecCompanyFactsProvider
+from app.providers.valuation import ValuationCalculationProvider
 
 
 settings = get_settings()
@@ -42,9 +43,9 @@ if settings.massive_api_key:
     )
 if edinet_index_repository is not None:
     providers.append(EdinetIndexedProvider(edinet_index_repository, settings.edinet_index_limit))
-# Pure-Python deterministic calculations always run last. If no compatible
-# primary-source metrics exist, this provider is a no-op.
+# Pure-Python deterministic calculations run after primary-source enrichment.
 providers.append(DerivedFinancialsProvider())
+providers.append(ValuationCalculationProvider())
 provider = CompositeResearchDataProvider(providers)
 engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 

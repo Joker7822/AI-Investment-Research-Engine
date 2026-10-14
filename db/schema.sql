@@ -9,8 +9,12 @@ CREATE TABLE IF NOT EXISTS analysis_requests (
     currency TEXT,
     user_question TEXT NOT NULL,
     investment_horizon TEXT NOT NULL,
+    request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Compatibility for databases initialized before request_json was introduced.
+ALTER TABLE analysis_requests
+    ADD COLUMN IF NOT EXISTS request_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS sources (
     source_id TEXT PRIMARY KEY,
@@ -133,8 +137,6 @@ CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_context ON edinet_csv_facts(doc_
 CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_lookup
     ON edinet_csv_facts(element_id, relative_year, consolidation, period_type);
 
--- Silver layer: deterministic exact-element mappings derived from Bronze facts.
--- Every metric retains a direct pointer to the original CSV source row.
 CREATE TABLE IF NOT EXISTS edinet_silver_metrics (
     doc_id TEXT NOT NULL REFERENCES edinet_filings(doc_id) ON DELETE CASCADE,
     metric_name TEXT NOT NULL,
