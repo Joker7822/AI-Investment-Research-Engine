@@ -9,11 +9,12 @@ A runnable MVP scaffold for a hierarchical investment-research system with **100
 The system intentionally avoids sending every question to all 100 agents. Python owns the workflow:
 
 1. Normalize the request and evidence.
-2. Deterministically route to a bounded specialist set.
-3. Run specialists in parallel.
-4. Run verification agents against specialist outputs.
-5. Run critics / risk committee against verified context.
-6. Let A100 CIO synthesize only qualitative judgement fields; Python owns numeric scoring and execution metadata.
+2. Enrich with configured data providers and enforce point-in-time rules.
+3. Deterministically route to a bounded specialist set.
+4. Run specialists in parallel.
+5. Run verification agents against specialist outputs.
+6. Run critics / risk committee against verified context.
+7. Let A100 CIO synthesize only qualitative judgement fields; Python owns numeric scoring and execution metadata.
 
 This keeps one final answer owner while reducing non-deterministic routing, duplicated evidence, latency, and cost.
 
@@ -29,10 +30,24 @@ This keeps one final answer owner while reducing non-deterministic routing, dupl
 - OpenAI Agents SDK tracing wraps the end-to-end workflow.
 - GitHub Actions CI on Python 3.11 and 3.12.
 - Optional SEC Company Facts enrichment for US equities, filtered strictly by the request `as_of` timestamp.
+- Optional Massive US stock/ETF market-data enrichment with raw OHLCV, dividends, and splits.
+
+## Point-in-time market-data policy
+
+Historical bars are requested with `adjusted=false`. This is deliberate: vendor-adjusted historical prices can be restated after later splits/dividends and can contaminate historical backtests with information that was not knowable at the analysis date.
+
+The provider therefore stores:
+
+- raw as-traded daily OHLCV;
+- only completed US sessions as of the request timestamp;
+- dividends only once their declaration date is knowable (falling back to ex-date if declaration date is unavailable);
+- splits only after their execution date because the selected split feed does not expose an announcement timestamp.
+
+Corporate actions remain separate from raw prices so a future point-in-time adjustment engine can reconstruct adjusted returns using only information available at each historical timestamp.
 
 ## Important limitation
 
-The SEC adapter covers a focused set of primary-source US-GAAP metrics; it is **not** a complete live market-data stack. Price, consensus, news, options, and non-US filing providers still need licensed/authorized adapters before production use.
+The SEC adapter covers a focused set of primary-source US-GAAP metrics. The Massive adapter currently targets US stocks/ETFs and daily data. Consensus, news, options, intraday point-in-time data, and non-US market/filing providers still need licensed/authorized adapters before production use.
 
 The output is a research-system scaffold, not a claim that the service satisfies any financial-regulatory requirement. Personalized investment advice may trigger registration/compliance obligations depending on jurisdiction and product behavior; obtain jurisdiction-specific legal review before deployment.
 
@@ -51,7 +66,9 @@ Set `OPENAI_API_KEY` in `.env` or the environment. The app passes it to the Agen
 
 `OPENAI_AGENT_MODEL` is optional. If blank, the SDK's default model/provider configuration is used.
 
-For US-equity SEC enrichment, set `SEC_USER_AGENT` to an application/contact identifier. If it is blank, the API stays in passthrough-data mode. SEC facts filed after the request `as_of` time are excluded to prevent look-ahead bias.
+For US-equity SEC enrichment, set `SEC_USER_AGENT` to an application/contact identifier. SEC facts filed after the request `as_of` time are excluded.
+
+For US stock/ETF market enrichment, set `MASSIVE_API_KEY`. `MASSIVE_LOOKBACK_DAYS` defaults to 400 calendar days. If neither data-provider credential is configured, the app stays in passthrough mode.
 
 ## Run
 
@@ -97,6 +114,7 @@ app/
     scoring.py
   providers/
     base.py
+    massive.py
     sec.py
 config/
   agents.yaml
@@ -134,11 +152,11 @@ If multiple agents depend on the same `source_id`, their independence weights ar
 ## Production next steps
 
 1. Wire `db/schema.sql` through a persistence repository and store immutable request/run/source provenance.
-2. Add market-price and corporate-action adapters with exchange timestamps.
-3. Add EDINET and other non-US primary filing adapters.
-4. Add licensed consensus/news providers with source-origin clustering.
+2. Add EDINET and other non-US primary filing adapters.
+3. Add point-in-time price adjustment / total-return calculations from raw bars + known corporate actions.
+4. Add licensed consensus/news/options providers with source-origin clustering.
 5. Add strict freshness policies per data type.
-6. Add calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
+6. Add deterministic calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
 7. Add eval datasets and calibration tracking.
 8. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
 9. Add auth, audit logs, secret management, data entitlements, and jurisdiction-aware compliance gates.
