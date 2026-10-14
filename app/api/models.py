@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.domain.schemas import AssetRef, InvestmentReport, ValuationAssumptions
 
@@ -30,6 +30,12 @@ class ValuationRequest(BaseModel):
     as_of: datetime
     asset: AssetRef
     assumptions: ValuationAssumptions
+
+    @model_validator(mode="after")
+    def require_scenario(self) -> "ValuationRequest":
+        if not self.assumptions.dcf and not self.assumptions.multiples:
+            raise ValueError("at least one DCF or multiple scenario is required")
+        return self
 
 
 class ValuationResponse(BaseModel):
