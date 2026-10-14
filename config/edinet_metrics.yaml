@@ -1,0 +1,111 @@
+version: "2026-10-14-v1"
+metrics:
+  revenue:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:NetSalesSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:RevenueIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:RevenuesUSGAAPSummaryOfBusinessResults
+
+  operating_income:
+    period: duration
+    jp_gaap:
+      - jppfs_cor:OperatingIncome
+    ifrs:
+      - jpigp_cor:OperatingProfitLossIFRS
+    us_gaap:
+      - jpcrp_cor:OperatingIncomeLossUSGAAPSummaryOfBusinessResults
+
+  ordinary_income:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:OrdinaryIncomeLossSummaryOfBusinessResults
+    ifrs: []
+    us_gaap: []
+
+  profit_before_tax:
+    period: duration
+    jp_gaap:
+      - jppfs_cor:IncomeBeforeIncomeTaxes
+    ifrs:
+      - jpcrp_cor:ProfitLossBeforeTaxIFRSSummaryOfBusinessResults
+      - jpigp_cor:ProfitLossBeforeTaxIFRS
+    us_gaap:
+      - jpcrp_cor:ProfitLossBeforeTaxUSGAAPSummaryOfBusinessResults
+
+  net_income:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults
+      - jpcrp_cor:NetIncomeLossSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:ProfitLossAttributableToOwnersOfParentIFRSSummaryOfBusinessResults
+      - jpcrp_cor:ProfitLossIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:NetIncomeLossAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults
+
+  total_assets:
+    period: instant
+    jp_gaap:
+      - jpcrp_cor:TotalAssetsSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:TotalAssetsIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:TotalAssetsUSGAAPSummaryOfBusinessResults
+
+  net_assets:
+    period: instant
+    jp_gaap:
+      - jpcrp_cor:NetAssetsSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:EquityAttributableToOwnersOfParentIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:EquityAttributableToOwnersOfParentUSGAAPSummaryOfBusinessResults
+      - jpcrp_cor:EquityIncludingPortionAttributableToNonControllingInterestUSGAAPSummaryOfBusinessResults
+
+  eps:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:BasicEarningsLossPerShareIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:BasicEarningsLossPerShareUSGAAPSummaryOfBusinessResults
+
+  roe_official:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:RateOfReturnOnEquitySummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:RateOfReturnOnEquityIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:RateOfReturnOnEquityUSGAAPSummaryOfBusinessResults
+
+  equity_ratio_official:
+    period: instant
+    jp_gaap:
+      - jpcrp_cor:EquityToAssetRatioSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:RatioOfOwnersEquityToGrossAssetsIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:EquityToAssetRatioUSGAAPSummaryOfBusinessResults
+
+  cf_operating:
+    period: duration
+    jp_gaap:
+      - jpcrp_cor:NetCashProvidedByUsedInOperatingActivitiesSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesUSGAAPSummaryOfBusinessResults
+
+  cash:
+    period: instant
+    jp_gaap:
+      - jpcrp_cor:CashAndCashEquivalentsSummaryOfBusinessResults
+    ifrs:
+      - jpcrp_cor:CashAndCashEquivalentsIFRSSummaryOfBusinessResults
+    us_gaap:
+      - jpcrp_cor:CashAndCashEquivalentsUSGAAPSummaryOfBusinessResults
