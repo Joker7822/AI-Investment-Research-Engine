@@ -19,70 +19,74 @@ The system intentionally avoids sending every question to all 100 agents. Python
 
 ## Current implementation
 
-- `config/agents.yaml`: A01–A100 registry.
-- `DeterministicRouter`: rules-first routing, with mandatory verification/committee agents.
-- `InvestmentAnalysisEngine`: parallel specialists, then verification, critics, then CIO.
-- Pydantic structured outputs via `Agent.output_type`.
-- Evidence-source independence penalty in score aggregation.
-- A62 Position Sizing is blocked unless `risk_profile_available=true`.
-- FastAPI endpoints for routing and analysis.
-- OpenAI Agents SDK tracing wraps the end-to-end workflow.
-- GitHub Actions CI on Python 3.11 and 3.12.
-- Optional SEC Company Facts enrichment for US equities, filtered by request `as_of`.
-- Optional Massive US stock/ETF market-data enrichment with raw OHLCV, dividends, and splits.
-- Optional PostgreSQL audit persistence for requests, sources, agent runs, claims, CIO output, and final reports.
-- EDINET API v2 daily document-list ingestion into PostgreSQL plus as-of Japanese-equity filing enrichment.
+- A01–A100 agent registry and deterministic routing.
+- Parallel specialists -> verification -> critics/risk committee -> A100 CIO.
+- Structured outputs, source-independence scoring, tracing, FastAPI, Docker and CI.
+- SEC Company Facts enrichment for US equities with `as_of` controls.
+- Massive US daily raw OHLCV + dividend/split enrichment with point-in-time controls.
+- PostgreSQL immutable audit persistence.
+- EDINET API v2 daily filing index with Japanese-equity `as_of` lookup.
+- EDINET `type=5` XBRL-to-CSV Bronze ingestion: official nine-column UTF-16LE TSV is parsed and stored without semantic remapping.
 
 ## Point-in-time market-data policy
 
 Historical bars are requested with `adjusted=false`. Vendor-adjusted historical prices can be restated after later splits/dividends and can contaminate historical backtests with information that was not knowable at the analysis date.
 
-The provider stores raw as-traded OHLCV and corporate actions separately. Only completed US sessions are exposed. Dividends require a declaration date already knowable at `as_of` (falling back to ex-date if unavailable), while splits are conservatively included only after execution because the selected split feed does not expose an announcement timestamp.
+Raw as-traded OHLCV and corporate actions remain separate. Only completed US sessions are exposed. Dividends require a declaration date already knowable at `as_of` (falling back to ex-date if unavailable); splits are conservatively included only after execution because the selected split feed does not expose an announcement timestamp.
 
 ## EDINET ingestion policy
 
-EDINET's document-list API is date-oriented. The analysis API therefore does **not** scan EDINET historical dates on every user request. Instead:
+The date-oriented EDINET document-list API is synchronized into PostgreSQL rather than scanned repeatedly during user requests:
 
 ```text
-EDINET API v2 /documents.json (one file date)
-  -> edinet-sync job
-  -> PostgreSQL edinet_filings index
-  -> secCode + submitted_at <= as_of query
+EDINET /documents.json
+  -> edinet-sync
+  -> edinet_filings
+  -> secCode + submitted_at <= as_of
   -> EdinetIndexedProvider
-  -> EvidenceRef / filings / fundamental_data
 ```
 
-This makes historical runs reproducible and avoids unnecessary EDINET traffic.
-
-Set `EDINET_API_KEY` and `DATABASE_URL`, then sync a date:
+Sync one date:
 
 ```bash
 edinet-sync --date 2026-10-14
 ```
 
-If `--date` is omitted, the Asia/Tokyo calendar date is used. The sync is idempotent by `doc_id` and records status in `edinet_sync_runs`.
+Japanese four-character security codes are normalized to EDINET's five-character `secCode` convention (`7203` -> `72030`, `607A` -> `607A0`). Runtime enrichment enforces `submitted_at <= as_of` in SQL and again in memory.
 
-Japanese four-character security codes are normalized to EDINET's five-character `secCode` convention (`7203` -> `72030`, `607A` -> `607A0`). Runtime enrichment queries only filings submitted at or before the request `as_of`; a second in-memory check rejects future records even if the database query were wrong.
+### EDINET type=5 Bronze layer
 
-The current EDINET milestone indexes **filing metadata** (document ID, issuer, form/document codes, reporting period, XBRL/CSV/PDF availability). It does not yet download and parse the `type=5` XBRL-to-CSV package into normalized financial metrics.
+For an indexed filing with `csvFlag=1` and a fetchable `legalStatus`, download and store its XBRL-to-CSV package:
+
+```bash
+edinet-csv-sync --doc-id S100XXXX
+```
+
+The package is fetched with EDINET document API `type=5`. The parser:
+
+- never extracts ZIP files to disk;
+- accepts only `XBRL_TO_CSV/*.csv` members;
+- validates the official nine-column header exactly;
+- decodes UTF-16/UTF-16LE and parses tab-delimited quoted values, including multiline text blocks;
+- applies file-count, per-file, total-uncompressed-size and row-count limits;
+- calculates a SHA-256 for package provenance.
+
+The Bronze table preserves, for every row:
+
+```text
+要素ID / 項目名 / コンテキストID / 相対年度 / 連結・個別 /
+期間・時点 / ユニットID / 単位 / 値
+```
+
+`edinet_csv_packages` stores package hash/file/fact counts; `edinet_csv_facts` stores the raw canonical rows. If the same `doc_id` and package SHA-256 are synchronized again, no rewrite occurs. Changed packages are replaced atomically using PostgreSQL COPY for the bulk facts.
+
+Semantic metric mapping is intentionally a separate Silver layer. The Bronze parser does **not** guess that a label means revenue/profit/etc.
 
 ## Audit policy
 
-If `DATABASE_URL` is unset, the app uses a no-op audit repository. If it is configured, the analysis endpoint writes the research provenance to PostgreSQL **before** returning the report.
-
-Database errors are fail-closed: the service does not silently return an unaudited investment report when durable audit storage was explicitly enabled. Reusing the same `request_id` also fails instead of overwriting the original run.
-
-Stored audit data includes request metadata, source IDs/URLs/timestamps/content hashes, specialist/verifier/critic runs, A100 CIO output, claims, direct fact-to-source links where available, and the final report JSON.
-
-## Important limitation
-
-The SEC adapter covers a focused set of US-GAAP metrics. The Massive adapter currently targets US stocks/ETFs and daily data. EDINET currently provides indexed filing metadata, not parsed financial statement values. Consensus, news, options, intraday point-in-time data, and full Japanese XBRL/CSV metric extraction remain production milestones.
-
-The output is a research-system scaffold, not a claim that the service satisfies any financial-regulatory requirement. Personalized investment advice may trigger registration/compliance obligations depending on jurisdiction and product behavior; obtain jurisdiction-specific legal review before deployment.
+If `DATABASE_URL` is unset, the app uses a no-op audit repository. If configured, the analysis endpoint writes research provenance to PostgreSQL before returning a report. Database errors are fail-closed, and duplicate `request_id` values do not overwrite prior runs.
 
 ## Setup
-
-Python 3.11+ is recommended.
 
 ```bash
 python -m venv .venv
@@ -91,12 +95,13 @@ pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` for agent execution. `OPENAI_AGENT_MODEL` is optional.
+Key settings:
 
-- `SEC_USER_AGENT`: enables SEC Company Facts enrichment.
-- `MASSIVE_API_KEY`: enables US stock/ETF daily market enrichment.
-- `DATABASE_URL`: enables audit persistence and the local EDINET filing index.
-- `EDINET_API_KEY`: required by the `edinet-sync` ingestion job, not by normal indexed reads.
+- `OPENAI_API_KEY`: agent execution.
+- `SEC_USER_AGENT`: SEC Company Facts enrichment.
+- `MASSIVE_API_KEY`: US daily market enrichment.
+- `DATABASE_URL`: audit persistence and EDINET index/Bronze storage.
+- `EDINET_API_KEY`: `edinet-sync` and `edinet-csv-sync` ingestion jobs.
 
 ## Run
 
@@ -104,13 +109,7 @@ Set `OPENAI_API_KEY` for agent execution. `OPENAI_AGENT_MODEL` is optional.
 uvicorn app.main:app --reload
 ```
 
-Health:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Route only (no LLM call):
+Route only:
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/route \
@@ -131,45 +130,22 @@ curl -s -X POST http://localhost:8000/v1/analyze \
 ```text
 app/
   api/main.py
-  core/settings.py
-  domain/
-    prompts.py
-    schemas.py
   jobs/
     sync_edinet.py
+    sync_edinet_csv.py
   orchestration/
-    engine.py
-    registry.py
-    router.py
-    scoring.py
   persistence/
     audit.py
     edinet.py
   providers/
     base.py
     edinet.py
+    edinet_csv.py
     massive.py
     sec.py
-config/
-  agents.yaml
-db/
-  schema.sql
-docs/
-  architecture.md
+config/agents.yaml
+db/schema.sql
 tests/
-```
-
-## Routing stages
-
-```text
-Request
-  -> Data enrichment / as-of filtering
-  -> Specialists (bounded, parallel)
-  -> A81/A82/A83/A89/A90 verification
-  -> A91/A92/A94/A98/A99 committee
-  -> A100 CIO
-  -> Audit persistence (when configured)
-  -> InvestmentReport
 ```
 
 ## Scoring
@@ -180,20 +156,14 @@ The deterministic pre-CIO aggregate uses:
 score × confidence × evidence_quality × source_independence
 ```
 
-If multiple agents depend on the same `source_id`, their independence weights are reduced.
-
 ## Production next steps
 
-1. Add EDINET `type=5` CSV download/parsing and normalize Japanese financial metrics.
-2. Add point-in-time price adjustment / total-return calculations from raw bars + known corporate actions.
-3. Add licensed consensus/news/options providers with source-origin clustering.
-4. Add strict freshness policies per data type.
-5. Add deterministic calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
-6. Add eval datasets and probability-calibration tracking.
-7. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
-8. Add auth, secret management, data entitlements, and jurisdiction-aware compliance gates.
-9. Add proper database migrations/retention policies and production backup/restore procedures.
-10. Separate security research from personalized suitability/position-sizing services.
+1. Build an EDINET Silver layer that maps official/extension element IDs into auditable Japanese financial metrics without losing Bronze provenance.
+2. Feed normalized EDINET metrics into `fundamental_data` and A11–A30 agents.
+3. Add point-in-time total-return calculations from raw bars + known corporate actions.
+4. Add licensed consensus/news/options providers with source-origin clustering.
+5. Add deterministic DCF/multiple calculation tools and calibration/eval datasets.
+6. Add per-agent budgets, caching, retries, circuit breakers, auth, entitlements, migrations and backup/restore.
 
 ## SDK assumptions verified on 2026-10-14
 
