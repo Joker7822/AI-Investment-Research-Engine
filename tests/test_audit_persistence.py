@@ -1,14 +1,18 @@
+import json
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from app.domain.schemas import (
     AnalysisRequest,
     AssetRef,
     CIOJudgement,
+    DCFScenarioAssumption,
     InvestmentReport,
     Stance,
+    ValuationAssumptions,
 )
 from app.orchestration.router import RoutePlan
-from app.persistence.audit import NullAuditRepository, stage_for_agent
+from app.persistence.audit import NullAuditRepository, _json, stage_for_agent
 
 
 def _route() -> RoutePlan:
@@ -27,6 +31,34 @@ def test_stage_for_agent_is_deterministic():
     assert stage_for_agent("A99", route) == "critic"
     assert stage_for_agent("A100", route) == "cio"
     assert stage_for_agent("A55", route) == "unknown"
+
+
+def test_audit_json_preserves_decimal_valuation_assumptions():
+    request = AnalysisRequest(
+        request_id="req_valuation",
+        as_of=datetime(2026, 10, 14, tzinfo=timezone.utc),
+        asset=AssetRef(type="equity", ticker="AAPL", currency="USD"),
+        user_question="valuation",
+        valuation_assumptions=ValuationAssumptions(
+            dcf=[
+                DCFScenarioAssumption(
+                    name="base",
+                    currency="USD",
+                    base_fcf=Decimal("100.25"),
+                    growth_rates=[Decimal("0.05")],
+                    wacc=Decimal("0.10"),
+                    terminal_growth=Decimal("0.02"),
+                    diluted_shares=Decimal("10"),
+                )
+            ]
+        ),
+    )
+
+    payload = json.loads(_json(request))
+    scenario = payload["valuation_assumptions"]["dcf"][0]
+    assert scenario["base_fcf"] == "100.25"
+    assert scenario["wacc"] == "0.10"
+    assert scenario["growth_rates"] == ["0.05"]
 
 
 async def test_null_audit_repository_is_noop():
