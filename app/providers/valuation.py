@@ -29,10 +29,21 @@ def _div(numerator: Decimal, denominator: Decimal) -> Decimal:
         return numerator / denominator
 
 
+def _dcf_discount_rate(scenario: DCFScenarioAssumption) -> tuple[str, Decimal]:
+    if scenario.cash_flow_basis == "fcff":
+        if scenario.wacc is None:
+            raise ValueError("FCFF DCF requires wacc")
+        return "wacc", scenario.wacc
+    if scenario.cost_of_equity is None:
+        raise ValueError("FCFE DCF requires cost_of_equity")
+    return "cost_of_equity", scenario.cost_of_equity
+
+
 def calculate_dcf(scenario: DCFScenarioAssumption) -> dict[str, Any]:
-    """Run a deterministic unlevered-style Gordon-growth DCF from explicit assumptions."""
+    """Run a deterministic Gordon-growth DCF from explicit FCFF or FCFE assumptions."""
+    discount_rate_name, discount_rate = _dcf_discount_rate(scenario)
     one = Decimal("1")
-    discount_base = one + scenario.wacc
+    discount_base = one + discount_rate
     forecast_fcf = scenario.base_fcf
     forecast: list[dict[str, str | int]] = []
     pv_forecast = Decimal("0")
@@ -55,11 +66,20 @@ def calculate_dcf(scenario: DCFScenarioAssumption) -> dict[str, Any]:
             )
 
         terminal_fcf = forecast_fcf * (one + scenario.terminal_growth)
-        terminal_value = _div(terminal_fcf, scenario.wacc - scenario.terminal_growth)
+        terminal_value = _div(terminal_fcf, discount_rate - scenario.terminal_growth)
         terminal_discount_factor = _pow(discount_base, len(scenario.growth_rates))
         pv_terminal = _div(terminal_value, terminal_discount_factor)
-        enterprise_value = pv_forecast + pv_terminal
-        equity_value = enterprise_value - scenario.net_debt
+        intrinsic_value = pv_forecast + pv_terminal
+
+        if scenario.cash_flow_basis == "fcff":
+            enterprise_value = intrinsic_value
+            equity_value = enterprise_value - scenario.net_debt
+            value_basis = "enterprise"
+        else:
+            equity_value = intrinsic_value
+            enterprise_value = equity_value + scenario.net_debt
+            value_basis = "equity"
+
         implied_value_per_share = _div(equity_value, scenario.diluted_shares)
 
     warnings: list[str] = []
@@ -67,22 +87,33 @@ def calculate_dcf(scenario: DCFScenarioAssumption) -> dict[str, Any]:
         warnings.append("non_positive_base_fcf")
     if scenario.net_debt < 0:
         warnings.append("negative_net_debt_represents_net_cash")
+    if scenario.cash_flow_basis == "fcfe" and scenario.net_debt != 0:
+        warnings.append("fcfe_values_equity_directly_net_debt_not_subtracted")
     if equity_value <= 0:
         warnings.append("non_positive_implied_equity_value")
+
+    assumptions: dict[str, Any] = {
+        "cash_flow_basis": scenario.cash_flow_basis,
+        "base_fcf": _s(scenario.base_fcf),
+        "growth_rates": [_s(value) for value in scenario.growth_rates],
+        "discount_rate_name": discount_rate_name,
+        "applied_discount_rate": _s(discount_rate),
+        "terminal_growth": _s(scenario.terminal_growth),
+        "net_debt": _s(scenario.net_debt),
+        "diluted_shares": _s(scenario.diluted_shares),
+    }
+    if scenario.wacc is not None:
+        assumptions["wacc"] = _s(scenario.wacc)
+    if scenario.cost_of_equity is not None:
+        assumptions["cost_of_equity"] = _s(scenario.cost_of_equity)
 
     return {
         "method": "dcf_gordon_growth",
         "scenario": scenario.name,
         "currency": scenario.currency,
         "classification": "assumption_based_calculation_not_evidence",
-        "assumptions": {
-            "base_fcf": _s(scenario.base_fcf),
-            "growth_rates": [_s(value) for value in scenario.growth_rates],
-            "wacc": _s(scenario.wacc),
-            "terminal_growth": _s(scenario.terminal_growth),
-            "net_debt": _s(scenario.net_debt),
-            "diluted_shares": _s(scenario.diluted_shares),
-        },
+        "value_basis": value_basis,
+        "assumptions": assumptions,
         "forecast": forecast,
         "pv_forecast_fcf": _s(pv_forecast),
         "terminal_fcf": _s(terminal_fcf),

@@ -38,19 +38,36 @@ class EvidenceRef(BaseModel):
 class DCFScenarioAssumption(BaseModel):
     name: str = "base"
     currency: str
+    cash_flow_basis: Literal["fcff", "fcfe"] = "fcff"
     base_fcf: Decimal
     growth_rates: list[Decimal] = Field(min_length=1, max_length=20)
-    wacc: Decimal
+    wacc: Decimal | None = None
+    cost_of_equity: Decimal | None = None
     terminal_growth: Decimal
     net_debt: Decimal = Decimal("0")
     diluted_shares: Decimal = Field(gt=0)
 
     @model_validator(mode="after")
     def validate_rates(self) -> "DCFScenarioAssumption":
-        if self.wacc <= self.terminal_growth:
-            raise ValueError("DCF requires wacc > terminal_growth")
-        if self.wacc <= Decimal("-1"):
-            raise ValueError("wacc must be greater than -1")
+        if self.cash_flow_basis == "fcff":
+            if self.wacc is None:
+                raise ValueError("FCFF DCF requires wacc")
+            if self.cost_of_equity is not None:
+                raise ValueError("FCFF DCF must not supply cost_of_equity")
+            discount_rate = self.wacc
+            discount_label = "wacc"
+        else:
+            if self.cost_of_equity is None:
+                raise ValueError("FCFE DCF requires cost_of_equity")
+            if self.wacc is not None:
+                raise ValueError("FCFE DCF must not supply wacc")
+            discount_rate = self.cost_of_equity
+            discount_label = "cost_of_equity"
+
+        if discount_rate <= self.terminal_growth:
+            raise ValueError(f"DCF requires {discount_label} > terminal_growth")
+        if discount_rate <= Decimal("-1"):
+            raise ValueError(f"{discount_label} must be greater than -1")
         if self.terminal_growth <= Decimal("-1"):
             raise ValueError("terminal_growth must be greater than -1")
         if any(rate <= Decimal("-1") for rate in self.growth_rates):

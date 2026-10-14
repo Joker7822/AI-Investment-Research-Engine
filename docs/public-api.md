@@ -86,7 +86,9 @@ curl http://localhost:8000/v1/reports/req_example \
 
 Runs only deterministic DCF/multiple calculations. It does **not** call OpenAI.
 
-The request must contain at least one explicit scenario. Missing WACC, FCF, growth, multiple, net debt, or diluted shares are never invented.
+The request must contain at least one explicit scenario. Missing cash-flow basis, discount-rate assumptions, FCF, growth, multiple, net debt, or diluted shares are never invented. `cash_flow_basis` defaults to `fcff` for backward compatibility.
+
+FCFF must use `wacc`; FCFE must use `cost_of_equity`. Mixed discount-rate inputs are rejected.
 
 ```bash
 curl -X POST http://localhost:8000/v1/valuation \
@@ -99,6 +101,7 @@ curl -X POST http://localhost:8000/v1/valuation \
       "dcf":[{
         "name":"base",
         "currency":"USD",
+        "cash_flow_basis":"fcff",
         "base_fcf":"1000000000",
         "growth_rates":["0.08","0.07","0.06","0.05","0.04"],
         "wacc":"0.085",
@@ -110,6 +113,8 @@ curl -X POST http://localhost:8000/v1/valuation \
     }
   }'
 ```
+
+For an FCFE scenario, replace `cash_flow_basis` with `"fcfe"`, omit `wacc`, and supply `cost_of_equity`. FCFE produces equity value directly, so net debt is not subtracted from the intrinsic value.
 
 If Massive market data is configured and the asset/currency is compatible, the response can also contain an as-of-safe market-price comparison.
 

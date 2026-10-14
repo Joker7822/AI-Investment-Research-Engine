@@ -15,6 +15,7 @@
       {
         "name": "base",
         "currency": "USD",
+        "cash_flow_basis": "fcff",
         "base_fcf": "100000000000",
         "growth_rates": ["0.08", "0.07", "0.06", "0.05", "0.04"],
         "wacc": "0.085",
