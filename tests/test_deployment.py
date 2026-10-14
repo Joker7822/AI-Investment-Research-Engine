@@ -32,6 +32,7 @@ def test_render_blueprint_wires_production_dependencies():
     assert env["DATABASE_URL"]["fromDatabase"]["name"] == "investment-research-db"
     assert env["OPENAI_API_KEY"]["sync"] is False
     assert env["PUBLIC_API_KEY_HASHES"]["sync"] is False
+    assert env["STRICT_STARTUP_READINESS"]["value"] == "true"
     assert env["WEB_CONCURRENCY"]["value"] == "1"
 
     cron = next(service for service in blueprint["services"] if service["type"] == "cron")

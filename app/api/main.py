@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
@@ -39,6 +40,7 @@ from app.providers.sec import SecCompanyFactsProvider
 from app.providers.valuation import ValuationCalculationProvider
 
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 if settings.openai_api_key:
     set_default_openai_key(settings.openai_api_key)
@@ -89,8 +91,43 @@ audit_repository = (
 )
 
 
+async def verify_strict_startup_readiness() -> None:
+    """Fail startup without exposing secret values when production dependencies are incomplete."""
+    if not settings.strict_startup_readiness:
+        return
+
+    missing: list[str] = []
+    if not settings.database_url:
+        missing.append("database")
+    if not settings.openai_api_key:
+        missing.append("openai")
+    try:
+        auth_configured = bool(configured_api_key_hashes(settings))
+    except ValueError as exc:
+        raise RuntimeError("Strict startup readiness failed: API auth configuration is invalid") from exc
+    if not auth_configured:
+        missing.append("api_auth")
+    if missing:
+        raise RuntimeError(
+            "Strict startup readiness failed: missing required configuration: " + ",".join(missing)
+        )
+
+    try:
+        # This harmless indexed lookup establishes DB connectivity and applies the
+        # idempotent schema bootstrap through PostgresAuditRepository._ensure_schema.
+        await audit_repository.get_report("__startup_readiness_probe__")
+    except Exception as exc:
+        logger.exception("Strict startup readiness failed: database connectivity unavailable")
+        raise RuntimeError("Strict startup readiness failed: database connectivity unavailable") from exc
+
+    logger.info(
+        "Strict startup readiness passed: database=true openai_configured=true api_auth_configured=true"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await verify_strict_startup_readiness()
     yield
     close_audit = getattr(audit_repository, "close", None)
     if close_audit is not None:
