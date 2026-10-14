@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     completed_at TIMESTAMPTZ,
     raw_output JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-
 CREATE INDEX IF NOT EXISTS idx_agent_runs_request ON agent_runs(request_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_id, completed_at DESC);
 
@@ -73,8 +72,6 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Local EDINET filing index. EDINET's document-list API is date-oriented, so
--- production requests query this durable index instead of scanning many dates.
 CREATE TABLE IF NOT EXISTS edinet_filings (
     doc_id TEXT PRIMARY KEY,
     filing_date DATE NOT NULL,
@@ -95,13 +92,9 @@ CREATE TABLE IF NOT EXISTS edinet_filings (
     raw_json JSONB NOT NULL,
     indexed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-CREATE INDEX IF NOT EXISTS idx_edinet_filings_sec_asof
-    ON edinet_filings(sec_code, submitted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_edinet_filings_edinet_asof
-    ON edinet_filings(edinet_code, submitted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_edinet_filings_date
-    ON edinet_filings(filing_date DESC);
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_sec_asof ON edinet_filings(sec_code, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_edinet_asof ON edinet_filings(edinet_code, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_date ON edinet_filings(filing_date DESC);
 
 CREATE TABLE IF NOT EXISTS edinet_sync_runs (
     sync_date DATE PRIMARY KEY,
@@ -111,3 +104,32 @@ CREATE TABLE IF NOT EXISTS edinet_sync_runs (
     completed_at TIMESTAMPTZ,
     error_text TEXT
 );
+
+-- Bronze layer: immutable provenance for the official type=5 XBRL-to-CSV ZIP.
+CREATE TABLE IF NOT EXISTS edinet_csv_packages (
+    doc_id TEXT PRIMARY KEY REFERENCES edinet_filings(doc_id) ON DELETE CASCADE,
+    package_sha256 TEXT NOT NULL,
+    source_file_count INTEGER NOT NULL CHECK (source_file_count >= 0),
+    fact_count INTEGER NOT NULL CHECK (fact_count >= 0),
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS edinet_csv_facts (
+    doc_id TEXT NOT NULL REFERENCES edinet_filings(doc_id) ON DELETE CASCADE,
+    source_file TEXT NOT NULL,
+    row_number INTEGER NOT NULL CHECK (row_number >= 2),
+    element_id TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    relative_year TEXT NOT NULL,
+    consolidation TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    unit_label TEXT NOT NULL,
+    raw_value TEXT NOT NULL,
+    PRIMARY KEY (doc_id, source_file, row_number)
+);
+CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_element ON edinet_csv_facts(doc_id, element_id);
+CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_context ON edinet_csv_facts(doc_id, context_id);
+CREATE INDEX IF NOT EXISTS idx_edinet_csv_facts_lookup
+    ON edinet_csv_facts(element_id, relative_year, consolidation, period_type);
