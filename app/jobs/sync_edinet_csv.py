@@ -5,6 +5,7 @@ import asyncio
 import json
 
 from app.core.settings import get_settings
+from app.metrics.edinet_silver import extract_silver_metrics
 from app.persistence.edinet import EdinetIndexRepository
 from app.providers.edinet import EdinetApiClient
 from app.providers.edinet_csv import parse_edinet_csv_package
@@ -36,12 +37,19 @@ async def sync(doc_id: str) -> dict[str, object]:
         payload = await client.fetch_csv_package(doc_id)
         parsed = parse_edinet_csv_package(payload)
         changed = await repository.store_csv_package(doc_id, parsed)
+
+        mapping_version, accounting_standard, silver = extract_silver_metrics(parsed.facts)
+        await repository.store_silver_metrics(doc_id, silver)
+
         result = {
             "status": "stored" if changed else "unchanged",
             "doc_id": doc_id,
             "sha256": parsed.sha256,
             "files": len(parsed.files),
             "facts": len(parsed.facts),
+            "accounting_standard": accounting_standard,
+            "mapping_version": mapping_version,
+            "silver_metrics": len(silver),
         }
         print(json.dumps(result, ensure_ascii=False))
         return result
@@ -51,7 +59,7 @@ async def sync(doc_id: str) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch one indexed EDINET document's type=5 CSV ZIP into the Bronze layer"
+        description="Fetch one EDINET type=5 package and rebuild Bronze + deterministic Silver metrics"
     )
     parser.add_argument("--doc-id", required=True, help="EDINET document ID, e.g. S100XXXX")
     args = parser.parse_args()
