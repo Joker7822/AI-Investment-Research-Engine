@@ -23,6 +23,8 @@ services:
         sync: false
       - key: PUBLIC_API_KEY_HASHES
         sync: false
+      - key: STRICT_STARTUP_READINESS
+        value: "true"
       - key: SEC_USER_AGENT
         sync: false
       - key: MASSIVE_API_KEY
