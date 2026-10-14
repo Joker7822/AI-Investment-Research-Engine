@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     openai_agent_model: str | None = None
     max_parallel_agents: int = 8
     agent_config_path: str = "config/agents.yaml"
+    sec_user_agent: str | None = None
+    sec_timeout_seconds: float = 15.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
