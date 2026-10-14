@@ -7,6 +7,7 @@ from app.orchestration.engine import InvestmentAnalysisEngine
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter
 from app.providers.base import PassthroughDataProvider
+from app.providers.sec import SecCompanyFactsProvider
 
 
 settings = get_settings()
@@ -14,7 +15,12 @@ if settings.openai_api_key:
     set_default_openai_key(settings.openai_api_key)
 registry = AgentRegistry(settings)
 router = DeterministicRouter(registry)
-engine = InvestmentAnalysisEngine(settings, registry, router, PassthroughDataProvider())
+provider = (
+    SecCompanyFactsProvider(settings.sec_user_agent, settings.sec_timeout_seconds)
+    if settings.sec_user_agent
+    else PassthroughDataProvider()
+)
+engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 
 app = FastAPI(title="Investment AI 100 Agents", version="0.1.0")
 

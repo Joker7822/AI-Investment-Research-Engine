@@ -28,10 +28,11 @@ This keeps one final answer owner while reducing non-deterministic routing, dupl
 - FastAPI endpoints for routing and analysis.
 - OpenAI Agents SDK tracing wraps the end-to-end workflow.
 - GitHub Actions CI on Python 3.11 and 3.12.
+- Optional SEC Company Facts enrichment for US equities, filtered strictly by the request `as_of` timestamp.
 
 ## Important limitation
 
-This repository does **not** ship a live market-data vendor. `PassthroughDataProvider` only analyzes data supplied by the caller. Do not treat an empty-data run as investment research. Add licensed/authorized market, filing, consensus, and news providers before production use.
+The SEC adapter covers a focused set of primary-source US-GAAP metrics; it is **not** a complete live market-data stack. Price, consensus, news, options, and non-US filing providers still need licensed/authorized adapters before production use.
 
 The output is a research-system scaffold, not a claim that the service satisfies any financial-regulatory requirement. Personalized investment advice may trigger registration/compliance obligations depending on jurisdiction and product behavior; obtain jurisdiction-specific legal review before deployment.
 
@@ -49,6 +50,8 @@ cp .env.example .env
 Set `OPENAI_API_KEY` in `.env` or the environment. The app passes it to the Agents SDK before the first model call.
 
 `OPENAI_AGENT_MODEL` is optional. If blank, the SDK's default model/provider configuration is used.
+
+For US-equity SEC enrichment, set `SEC_USER_AGENT` to an application/contact identifier. If it is blank, the API stays in passthrough-data mode. SEC facts filed after the request `as_of` time are excluded to prevent look-ahead bias.
 
 ## Run
 
@@ -94,6 +97,7 @@ app/
     scoring.py
   providers/
     base.py
+    sec.py
 config/
   agents.yaml
 db/
@@ -107,6 +111,7 @@ tests/
 
 ```text
 Request
+  -> Data enrichment / as-of filtering
   -> Specialists (bounded, parallel)
   -> A81/A82/A83/A89/A90 verification
   -> A91/A92/A94/A98/A99 committee
@@ -129,14 +134,15 @@ If multiple agents depend on the same `source_id`, their independence weights ar
 ## Production next steps
 
 1. Wire `db/schema.sql` through a persistence repository and store immutable request/run/source provenance.
-2. Replace `PassthroughDataProvider` with normalized, timestamped data adapters.
-3. Create production evidence ingestion and source-origin clustering with immutable source provenance.
-4. Add strict freshness policies per data type.
-5. Add calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
-6. Add eval datasets and calibration tracking.
-7. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
-8. Add auth, audit logs, secret management, data entitlements, and jurisdiction-aware compliance gates.
-9. Separate security research from personalized suitability/position-sizing services.
+2. Add market-price and corporate-action adapters with exchange timestamps.
+3. Add EDINET and other non-US primary filing adapters.
+4. Add licensed consensus/news providers with source-origin clustering.
+5. Add strict freshness policies per data type.
+6. Add calculation tools for DCF/multiples instead of asking LLMs to do arithmetic.
+7. Add eval datasets and calibration tracking.
+8. Add per-agent budget/latency caps, caching, retries, and circuit breakers.
+9. Add auth, audit logs, secret management, data entitlements, and jurisdiction-aware compliance gates.
+10. Separate security research from personalized suitability/position-sizing services.
 
 ## SDK assumptions verified on 2026-10-14
 
