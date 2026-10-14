@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     database_url: str | None = None
     database_schema_path: str = "db/schema.sql"
 
+    edinet_api_key: str | None = None
+    edinet_timeout_seconds: float = 30.0
+    edinet_index_limit: int = 8
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
