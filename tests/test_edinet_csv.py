@@ -1,3 +1,4 @@
+import csv
 import io
 import zipfile
 
@@ -9,10 +10,11 @@ from app.providers.edinet_csv import EXPECTED_HEADERS, parse_edinet_csv_package
 
 
 def _package(rows, *, filename="XBRL_TO_CSV/jpcrp.csv", bom=True):
-    text = "\t".join(EXPECTED_HEADERS) + "\n"
-    for row in rows:
-        text += "\t".join(row) + "\n"
-    data = text.encode("utf-16" if bom else "utf-16le")
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, delimiter="\t", lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(EXPECTED_HEADERS)
+    writer.writerows(rows)
+    data = stream.getvalue().encode("utf-16" if bom else "utf-16le")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(filename, data)
