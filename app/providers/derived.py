@@ -47,18 +47,9 @@ def _input(metrics: dict[str, Any], metric_name: str, period_key: str) -> InputV
         provenance={
             key: raw.get(key)
             for key in (
-                "doc_id",
-                "element_id",
-                "context_id",
-                "source_file",
-                "row_number",
-                "mapping_version",
-                "raw_value",
-                "numeric_value",
-                "unit_id",
-                "unit_label",
-                "scope",
-                "accounting_standard",
+                "doc_id", "element_id", "context_id", "source_file", "row_number",
+                "mapping_version", "raw_value", "numeric_value", "unit_id",
+                "unit_label", "scope", "accounting_standard",
             )
         },
     )
@@ -92,8 +83,9 @@ def _ratio(numerator: Decimal, denominator: Decimal) -> Decimal | None:
 
 
 def _growth(current: Decimal, prior: Decimal) -> Decimal | None:
-    ratio = _ratio(current, prior)
-    return None if ratio is None else ratio - Decimal(1)
+    # (current - prior) / prior avoids a second arithmetic operation under the
+    # process-global Decimal context after the 34-digit ratio has been produced.
+    return _ratio(current - prior, prior)
 
 
 def _average(a: Decimal, b: Decimal) -> Decimal:
@@ -105,11 +97,7 @@ def _serialize(value: Decimal) -> str:
 
 
 def _calculation(
-    *,
-    formula: str,
-    value: Decimal,
-    inputs: list[InputValue],
-    notes: list[str] | None = None,
+    *, formula: str, value: Decimal, inputs: list[InputValue], notes: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "value": _serialize(value),
@@ -127,7 +115,6 @@ def derive_edinet_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], list
     Skipped calculations are returned as machine-readable diagnostics instead of
     silently substituting inputs from another period/source.
     """
-
     derived: dict[str, Any] = {}
     skipped: list[dict[str, str]] = []
 
@@ -167,62 +154,22 @@ def derive_edinet_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], list
     current_equity = get("net_assets")
     prior_equity = get("net_assets", "Prior1Year")
 
-    two_input(
-        "revenue_growth_yoy",
-        current_revenue,
-        prior_revenue,
-        "revenue(CurrentYear) / revenue(Prior1Year) - 1",
-        _growth,
-    )
-    two_input(
-        "operating_margin",
-        current_operating_income,
-        current_revenue,
-        "operating_income(CurrentYear) / revenue(CurrentYear)",
-        _ratio,
-    )
-    two_input(
-        "net_margin",
-        current_net_income,
-        current_revenue,
-        "net_income(CurrentYear) / revenue(CurrentYear)",
-        _ratio,
-    )
-    two_input(
-        "operating_cash_flow_margin",
-        current_cfo,
-        current_revenue,
-        "cf_operating(CurrentYear) / revenue(CurrentYear)",
-        _ratio,
-    )
-    two_input(
-        "asset_growth_yoy",
-        current_assets,
-        prior_assets,
-        "total_assets(CurrentYear) / total_assets(Prior1Year) - 1",
-        _growth,
-    )
-    two_input(
-        "equity_growth_yoy",
-        current_equity,
-        prior_equity,
-        "net_assets(CurrentYear) / net_assets(Prior1Year) - 1",
-        _growth,
-    )
-    two_input(
-        "equity_ratio_calculated",
-        current_equity,
-        current_assets,
-        "net_assets(CurrentYear) / total_assets(CurrentYear)",
-        _ratio,
-    )
-    two_input(
-        "cash_conversion",
-        current_cfo,
-        current_net_income,
-        "cf_operating(CurrentYear) / net_income(CurrentYear)",
-        _ratio,
-    )
+    two_input("revenue_growth_yoy", current_revenue, prior_revenue,
+              "revenue(CurrentYear) / revenue(Prior1Year) - 1", _growth)
+    two_input("operating_margin", current_operating_income, current_revenue,
+              "operating_income(CurrentYear) / revenue(CurrentYear)", _ratio)
+    two_input("net_margin", current_net_income, current_revenue,
+              "net_income(CurrentYear) / revenue(CurrentYear)", _ratio)
+    two_input("operating_cash_flow_margin", current_cfo, current_revenue,
+              "cf_operating(CurrentYear) / revenue(CurrentYear)", _ratio)
+    two_input("asset_growth_yoy", current_assets, prior_assets,
+              "total_assets(CurrentYear) / total_assets(Prior1Year) - 1", _growth)
+    two_input("equity_growth_yoy", current_equity, prior_equity,
+              "net_assets(CurrentYear) / net_assets(Prior1Year) - 1", _growth)
+    two_input("equity_ratio_calculated", current_equity, current_assets,
+              "net_assets(CurrentYear) / total_assets(CurrentYear)", _ratio)
+    two_input("cash_conversion", current_cfo, current_net_income,
+              "cf_operating(CurrentYear) / net_income(CurrentYear)", _ratio)
 
     def average_balance_ratio(
         name: str,
@@ -255,7 +202,6 @@ def derive_edinet_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], list
 
     average_balance_ratio("roa_calculated", current_net_income, current_assets, prior_assets, "total_assets")
     average_balance_ratio("roe_calculated", current_net_income, current_equity, prior_equity, "net_assets")
-
     return derived, skipped
 
 
