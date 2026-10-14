@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 
@@ -34,6 +35,45 @@ class EvidenceRef(BaseModel):
     quality: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class DCFScenarioAssumption(BaseModel):
+    name: str = "base"
+    currency: str
+    base_fcf: Decimal
+    growth_rates: list[Decimal] = Field(min_length=1, max_length=20)
+    wacc: Decimal
+    terminal_growth: Decimal
+    net_debt: Decimal = Decimal("0")
+    diluted_shares: Decimal = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_rates(self) -> "DCFScenarioAssumption":
+        if self.wacc <= self.terminal_growth:
+            raise ValueError("DCF requires wacc > terminal_growth")
+        if self.wacc <= Decimal("-1"):
+            raise ValueError("wacc must be greater than -1")
+        if self.terminal_growth <= Decimal("-1"):
+            raise ValueError("terminal_growth must be greater than -1")
+        if any(rate <= Decimal("-1") for rate in self.growth_rates):
+            raise ValueError("each forecast growth rate must be greater than -1")
+        return self
+
+
+class MultipleScenarioAssumption(BaseModel):
+    name: str
+    currency: str
+    metric_name: str
+    metric_value: Decimal
+    multiple: Decimal = Field(gt=0)
+    basis: Literal["equity", "enterprise"]
+    net_debt: Decimal = Decimal("0")
+    diluted_shares: Decimal = Field(gt=0)
+
+
+class ValuationAssumptions(BaseModel):
+    dcf: list[DCFScenarioAssumption] = Field(default_factory=list, max_length=10)
+    multiples: list[MultipleScenarioAssumption] = Field(default_factory=list, max_length=20)
+
+
 class AnalysisRequest(BaseModel):
     request_id: str | None = None
     as_of: datetime
@@ -49,6 +89,7 @@ class AnalysisRequest(BaseModel):
     filings: list[dict[str, Any]] = Field(default_factory=list)
     news: list[dict[str, Any]] = Field(default_factory=list)
     portfolio_context: dict[str, Any] | None = None
+    valuation_assumptions: ValuationAssumptions | None = None
 
 
 class Fact(BaseModel):
