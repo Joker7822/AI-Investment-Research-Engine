@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # for local development. Production deployments should always configure it.
     public_api_key_hashes: str | None = None
     api_docs_enabled: bool = True
+    # When enabled, startup fails unless DB connectivity, OpenAI configuration,
+    # and public API authentication are all production-ready.
+    strict_startup_readiness: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
