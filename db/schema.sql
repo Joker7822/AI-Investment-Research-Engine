@@ -1,5 +1,4 @@
 -- PostgreSQL reference schema for auditability and evidence provenance.
--- The MVP code does not require a database yet; this is the target persistence model.
 
 CREATE TABLE IF NOT EXISTS analysis_requests (
     request_id TEXT PRIMARY KEY,
@@ -72,4 +71,43 @@ CREATE TABLE IF NOT EXISTS reports (
     evidence_quality NUMERIC(5,4) NOT NULL CHECK (evidence_quality BETWEEN 0 AND 1),
     report_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Local EDINET filing index. EDINET's document-list API is date-oriented, so
+-- production requests query this durable index instead of scanning many dates.
+CREATE TABLE IF NOT EXISTS edinet_filings (
+    doc_id TEXT PRIMARY KEY,
+    filing_date DATE NOT NULL,
+    submitted_at TIMESTAMPTZ,
+    edinet_code TEXT,
+    sec_code TEXT,
+    jcn TEXT,
+    filer_name TEXT,
+    ordinance_code TEXT,
+    form_code TEXT,
+    doc_type_code TEXT,
+    period_start DATE,
+    period_end DATE,
+    xbrl_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    csv_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    pdf_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    legal_status TEXT,
+    raw_json JSONB NOT NULL,
+    indexed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_sec_asof
+    ON edinet_filings(sec_code, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_edinet_asof
+    ON edinet_filings(edinet_code, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_edinet_filings_date
+    ON edinet_filings(filing_date DESC);
+
+CREATE TABLE IF NOT EXISTS edinet_sync_runs (
+    sync_date DATE PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    document_count INTEGER CHECK (document_count >= 0),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    error_text TEXT
 );

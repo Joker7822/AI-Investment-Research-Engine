@@ -14,6 +14,9 @@ dependencies = [
   "asyncpg>=0.29,<1",
 ]
 
+[project.scripts]
+edinet-sync = "app.jobs.sync_edinet:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8,<9",
