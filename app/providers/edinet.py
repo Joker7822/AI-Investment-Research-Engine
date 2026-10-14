@@ -161,14 +161,18 @@ class EdinetIndexedProvider(ResearchDataProvider):
         if not self._supports(request):
             return request
 
+        as_of = parse_edinet_datetime(request.as_of)
+        if as_of is None:
+            raise ValueError("EDINET enrichment requires a valid as_of timestamp")
+
         sec_code = normalize_sec_code(request.asset.ticker)
-        rows = await self.index.latest_for_sec_code(sec_code, request.as_of, self.limit)
+        rows = await self.index.latest_for_sec_code(sec_code, as_of, self.limit)
 
         # Defense in depth: never trust the storage query alone for point-in-time safety.
         safe_rows: list[dict[str, Any]] = []
         for row in rows:
             submitted = parse_edinet_datetime(row.get("submitted_at"))
-            if submitted is None or submitted > request.as_of:
+            if submitted is None or submitted > as_of:
                 continue
             safe_rows.append(row)
 
