@@ -4,6 +4,35 @@ from app.api.auth import configured_api_key_hashes
 from app.api.main import app, audit_repository, settings
 
 
+@app.get("/", include_in_schema=False)
+async def api_landing() -> JSONResponse:
+    """Human-friendly API landing response for browsers and simple uptime checks."""
+    links = {
+        "health": "/v1/health",
+        "readiness": "/v1/ready",
+    }
+    if settings.api_docs_enabled:
+        links["docs"] = "/docs"
+        links["redoc"] = "/redoc"
+        links["openapi"] = "/openapi.json"
+
+    return JSONResponse(
+        content={
+            "service": settings.api_name,
+            "version": settings.api_version,
+            "status": "ok",
+            "message": "Investment Research API is running",
+            "links": links,
+            "endpoints": {
+                "research": "POST /v1/research",
+                "valuation": "POST /v1/valuation",
+                "route": "POST /v1/route",
+                "report": "GET /v1/reports/{request_id}",
+            },
+        }
+    )
+
+
 @app.get("/v1/ready", include_in_schema=False)
 async def readiness() -> JSONResponse:
     """Production readiness probe without exposing secret values."""
