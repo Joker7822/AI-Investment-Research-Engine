@@ -127,48 +127,92 @@ class EdinetIndexRepository:
             """, doc_id)
         return dict(row) if row else None
 
-    async def store_csv_package(self, doc_id: str, package: ParsedEdinetCsvPackage) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            await self._ensure_schema(conn)
-            async with conn.transaction():
-                existing = await conn.fetchval("SELECT package_sha256 FROM edinet_csv_packages WHERE doc_id=$1 FOR UPDATE", doc_id)
-                if existing == package.sha256:
-                    return False
-                await conn.execute("DELETE FROM edinet_csv_facts WHERE doc_id=$1", doc_id)
-                records = [(doc_id, f.source_file, f.row_number, f.element_id, f.item_name, f.context_id,
-                            f.relative_year, f.consolidation, f.period_type, f.unit_id, f.unit_label, f.value)
-                           for f in package.facts]
-                if records:
-                    await conn.copy_records_to_table("edinet_csv_facts", records=records, columns=(
-                        "doc_id", "source_file", "row_number", "element_id", "item_name", "context_id",
-                        "relative_year", "consolidation", "period_type", "unit_id", "unit_label", "raw_value"))
-                await conn.execute("""
-                    INSERT INTO edinet_csv_packages (doc_id, package_sha256, source_file_count, fact_count, fetched_at)
-                    VALUES ($1,$2,$3,$4,now())
-                    ON CONFLICT (doc_id) DO UPDATE SET package_sha256=EXCLUDED.package_sha256,
-                        source_file_count=EXCLUDED.source_file_count, fact_count=EXCLUDED.fact_count, fetched_at=now()
-                """, doc_id, package.sha256, len(package.files), len(package.facts))
+    @staticmethod
+    async def _replace_bronze(
+        conn: asyncpg.Connection,
+        doc_id: str,
+        package: ParsedEdinetCsvPackage,
+    ) -> bool:
+        existing = await conn.fetchval(
+            "SELECT package_sha256 FROM edinet_csv_packages WHERE doc_id=$1 FOR UPDATE",
+            doc_id,
+        )
+        if existing == package.sha256:
+            return False
+
+        await conn.execute("DELETE FROM edinet_csv_facts WHERE doc_id=$1", doc_id)
+        records = [(
+            doc_id, fact.source_file, fact.row_number, fact.element_id, fact.item_name,
+            fact.context_id, fact.relative_year, fact.consolidation, fact.period_type,
+            fact.unit_id, fact.unit_label, fact.value,
+        ) for fact in package.facts]
+        if records:
+            await conn.copy_records_to_table("edinet_csv_facts", records=records, columns=(
+                "doc_id", "source_file", "row_number", "element_id", "item_name", "context_id",
+                "relative_year", "consolidation", "period_type", "unit_id", "unit_label", "raw_value"))
+        await conn.execute("""
+            INSERT INTO edinet_csv_packages (doc_id, package_sha256, source_file_count, fact_count, fetched_at)
+            VALUES ($1,$2,$3,$4,now())
+            ON CONFLICT (doc_id) DO UPDATE SET package_sha256=EXCLUDED.package_sha256,
+                source_file_count=EXCLUDED.source_file_count, fact_count=EXCLUDED.fact_count, fetched_at=now()
+        """, doc_id, package.sha256, len(package.files), len(package.facts))
         return True
 
-    async def store_silver_metrics(self, doc_id: str, metrics: list[SilverMetric]) -> None:
+    @staticmethod
+    async def _replace_silver(
+        conn: asyncpg.Connection,
+        doc_id: str,
+        metrics: list[SilverMetric],
+    ) -> None:
+        await conn.execute("DELETE FROM edinet_silver_metrics WHERE doc_id=$1", doc_id)
+        records = [(
+            doc_id, metric.metric_name, metric.accounting_standard, metric.mapping_version,
+            metric.mapping_priority, metric.scope, metric.period_key, metric.element_id,
+            metric.item_name, metric.context_id, metric.relative_year, metric.period_type,
+            metric.unit_id, metric.unit_label, metric.raw_value, metric.numeric_value,
+            metric.source_file, metric.row_number,
+        ) for metric in metrics]
+        if records:
+            await conn.copy_records_to_table("edinet_silver_metrics", records=records, columns=(
+                "doc_id", "metric_name", "accounting_standard", "mapping_version", "mapping_priority",
+                "scope", "period_key", "element_id", "item_name", "context_id", "relative_year",
+                "period_type", "unit_id", "unit_label", "raw_value", "numeric_value",
+                "source_file", "row_number"))
+
+    async def store_csv_and_silver(
+        self,
+        doc_id: str,
+        package: ParsedEdinetCsvPackage,
+        metrics: list[SilverMetric],
+    ) -> bool:
+        """Atomically update Bronze and rebuild Silver; return whether Bronze changed.
+
+        Silver is rebuilt even when the ZIP hash is unchanged so a versioned mapping
+        change can be applied without forcing a source re-download/rewrite.
+        """
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
             async with conn.transaction():
-                await conn.execute("DELETE FROM edinet_silver_metrics WHERE doc_id=$1", doc_id)
-                records = [(
-                    doc_id, m.metric_name, m.accounting_standard, m.mapping_version, m.mapping_priority,
-                    m.scope, m.period_key, m.element_id, m.item_name, m.context_id, m.relative_year,
-                    m.period_type, m.unit_id, m.unit_label, m.raw_value, m.numeric_value,
-                    m.source_file, m.row_number,
-                ) for m in metrics]
-                if records:
-                    await conn.copy_records_to_table("edinet_silver_metrics", records=records, columns=(
-                        "doc_id", "metric_name", "accounting_standard", "mapping_version", "mapping_priority",
-                        "scope", "period_key", "element_id", "item_name", "context_id", "relative_year",
-                        "period_type", "unit_id", "unit_label", "raw_value", "numeric_value",
-                        "source_file", "row_number"))
+                bronze_changed = await self._replace_bronze(conn, doc_id, package)
+                await self._replace_silver(conn, doc_id, metrics)
+        return bronze_changed
+
+    async def store_csv_package(self, doc_id: str, package: ParsedEdinetCsvPackage) -> bool:
+        """Backward-compatible Bronze-only write path."""
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                return await self._replace_bronze(conn, doc_id, package)
+
+    async def store_silver_metrics(self, doc_id: str, metrics: list[SilverMetric]) -> None:
+        """Backward-compatible Silver-only rebuild path."""
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                await self._replace_silver(conn, doc_id, metrics)
 
     async def silver_metrics_for_docs(self, doc_ids: list[str]) -> list[dict[str, Any]]:
         if not doc_ids:
@@ -186,11 +230,11 @@ class EdinetIndexRepository:
             """, doc_ids)
         order = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
         result = [dict(row) for row in rows]
-        result.sort(key=lambda r: (
-            order.get(r["doc_id"], 10_000), r["metric_name"],
-            0 if r["period_key"] == "CurrentYear" else 1,
-            0 if r["scope"] == "consolidated" else 1,
-            r["mapping_priority"], r["context_id"],
+        result.sort(key=lambda row: (
+            order.get(row["doc_id"], 10_000), row["metric_name"],
+            0 if row["period_key"] == "CurrentYear" else 1,
+            0 if row["scope"] == "consolidated" else 1,
+            row["mapping_priority"], row["context_id"],
         ))
         return result
 
@@ -198,5 +242,8 @@ class EdinetIndexRepository:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
-            row = await conn.fetchrow("SELECT doc_id, package_sha256, source_file_count, fact_count, fetched_at FROM edinet_csv_packages WHERE doc_id=$1", doc_id)
+            row = await conn.fetchrow(
+                "SELECT doc_id, package_sha256, source_file_count, fact_count, fetched_at FROM edinet_csv_packages WHERE doc_id=$1",
+                doc_id,
+            )
         return dict(row) if row else None
