@@ -6,7 +6,8 @@ from app.domain.schemas import AnalysisRequest, InvestmentReport
 from app.orchestration.engine import InvestmentAnalysisEngine
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter
-from app.providers.base import PassthroughDataProvider
+from app.providers.base import CompositeResearchDataProvider, PassthroughDataProvider
+from app.providers.massive import MassiveMarketDataProvider
 from app.providers.sec import SecCompanyFactsProvider
 
 
@@ -15,11 +16,19 @@ if settings.openai_api_key:
     set_default_openai_key(settings.openai_api_key)
 registry = AgentRegistry(settings)
 router = DeterministicRouter(registry)
-provider = (
-    SecCompanyFactsProvider(settings.sec_user_agent, settings.sec_timeout_seconds)
-    if settings.sec_user_agent
-    else PassthroughDataProvider()
-)
+
+providers = []
+if settings.sec_user_agent:
+    providers.append(SecCompanyFactsProvider(settings.sec_user_agent, settings.sec_timeout_seconds))
+if settings.massive_api_key:
+    providers.append(
+        MassiveMarketDataProvider(
+            settings.massive_api_key,
+            settings.massive_timeout_seconds,
+            settings.massive_lookback_days,
+        )
+    )
+provider = CompositeResearchDataProvider(providers) if providers else PassthroughDataProvider()
 engine = InvestmentAnalysisEngine(settings, registry, router, provider)
 
 app = FastAPI(title="Investment AI 100 Agents", version="0.1.0")
