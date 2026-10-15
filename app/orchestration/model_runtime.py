@@ -48,6 +48,14 @@ def use_model_provider(provider: ModelProviderMode) -> Iterator[None]:
         _model_provider_override.reset(token)
 
 
+def current_model_provider(default: ModelProviderMode = "auto") -> ModelProviderMode:
+    """Resolve a request-scoped override without changing an explicit caller choice."""
+    request_override = _model_provider_override.get()
+    if default == "auto" and request_override != "auto":
+        return request_override
+    return default
+
+
 def custom_llm_configured(settings: Settings) -> bool:
     values = (
         settings.custom_llm_base_url,
@@ -162,10 +170,7 @@ class ModelRuntime:
         provider: ModelProviderMode = "auto",
     ):
         """Run one agent using the requested provider selection mode."""
-        request_override = _model_provider_override.get()
-        effective_provider: ModelProviderMode = (
-            request_override if provider == "auto" and request_override != "auto" else provider
-        )
+        effective_provider = current_model_provider(provider)
 
         if effective_provider == "openai":
             if not self.settings.openai_api_key:
