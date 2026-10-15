@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from agents import OpenAIChatCompletionsModel, Runner, set_tracing_disabled
 from openai import (
@@ -20,6 +20,16 @@ from app.core.settings import Settings
 
 
 logger = logging.getLogger(__name__)
+
+ModelProviderMode = Literal["auto", "openai", "custom"]
+
+
+class ModelProviderUnavailableError(RuntimeError):
+    """Raised when a caller explicitly selects an unconfigured model provider."""
+
+    def __init__(self, provider: ModelProviderMode):
+        super().__init__(f"AI provider is unavailable: {provider}")
+        self.provider = provider
 
 
 def custom_llm_configured(settings: Settings) -> bool:
@@ -40,6 +50,14 @@ def model_runtime_configured(settings: Settings) -> bool:
     return bool(settings.openai_api_key) or custom_llm_configured(settings)
 
 
+def provider_mode_configured(settings: Settings, provider: ModelProviderMode) -> bool:
+    if provider == "openai":
+        return bool(settings.openai_api_key)
+    if provider == "custom":
+        return custom_llm_configured(settings)
+    return model_runtime_configured(settings)
+
+
 def primary_provider_unavailable(exc: Exception) -> bool:
     if isinstance(
         exc,
@@ -58,11 +76,12 @@ def primary_provider_unavailable(exc: Exception) -> bool:
 
 
 class ModelRuntime:
-    """Run Agents SDK calls against OpenAI with a configurable compatible fallback.
+    """Run Agents SDK calls against selectable primary/custom model providers.
 
-    The fallback endpoint must implement an OpenAI-compatible Chat Completions API
-    sufficiently for Agents SDK structured outputs. Provider secrets never leave
-    server-side configuration.
+    `auto` prefers OpenAI and fails over to the configured OpenAI-compatible custom
+    Chat Completions endpoint when the primary provider is unavailable. `openai`
+    and `custom` force one provider and never silently switch to the other.
+    Provider secrets remain server-side configuration only.
     """
 
     def __init__(self, settings: Settings):
@@ -81,7 +100,7 @@ class ModelRuntime:
                 openai_client=client,
             )
 
-        # Agents SDK tracing defaults to OpenAI. In fallback-only deployments,
+        # Agents SDK tracing defaults to OpenAI. In custom-only deployments,
         # disable tracing so no OpenAI credential is required just to export spans.
         if not settings.openai_api_key and self._fallback_model is not None:
             set_tracing_disabled(disabled=True)
@@ -93,8 +112,15 @@ class ModelRuntime:
     @property
     def fallback_model(self) -> OpenAIChatCompletionsModel:
         if self._fallback_model is None:
-            raise RuntimeError("Custom LLM fallback is not configured")
+            raise ModelProviderUnavailableError("custom")
         return self._fallback_model
+
+    def supports(self, provider: ModelProviderMode) -> bool:
+        if provider == "openai":
+            return bool(self.settings.openai_api_key)
+        if provider == "custom":
+            return self._fallback_model is not None
+        return bool(self.settings.openai_api_key) or self._fallback_model is not None
 
     def _primary_circuit_open(self) -> bool:
         return time.monotonic() < self._primary_unavailable_until
@@ -106,11 +132,23 @@ class ModelRuntime:
         self,
         build_agent: Callable[[Any | None], Any],
         input_text: str,
+        *,
+        provider: ModelProviderMode = "auto",
     ):
-        """Run primary first, then fail over on provider-unavailability failures."""
+        """Run one agent using the requested provider selection mode."""
+        if provider == "openai":
+            if not self.settings.openai_api_key:
+                raise ModelProviderUnavailableError("openai")
+            return await Runner.run(build_agent(None), input_text)
+
+        if provider == "custom":
+            if self._fallback_model is None:
+                raise ModelProviderUnavailableError("custom")
+            return await Runner.run(build_agent(self._fallback_model), input_text)
+
         if not self.settings.openai_api_key:
             if self._fallback_model is None:
-                raise RuntimeError("No model runtime is configured")
+                raise ModelProviderUnavailableError("auto")
             return await Runner.run(build_agent(self._fallback_model), input_text)
 
         if self._fallback_model is not None and self._primary_circuit_open():
