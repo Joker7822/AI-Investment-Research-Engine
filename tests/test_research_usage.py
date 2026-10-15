@@ -1,3 +1,4 @@
+import inspect
 from datetime import datetime, timezone
 
 import pytest
@@ -13,6 +14,7 @@ from app.core.usage import (
     evaluate_research_usage,
 )
 from app.domain.schemas import AnalysisRequest, AssetRef
+from app.persistence.audit import PostgresAuditRepository
 
 
 def _limits(**overrides) -> ResearchUsageLimits:
@@ -120,6 +122,24 @@ def test_usage_rejects_single_request_above_agent_cap_before_window_limits():
     assert decision.retry_after_seconds is None
 
 
+def test_per_request_agent_cap_is_non_retryable_invalid_request():
+    decision = evaluate_research_usage(
+        _limits(max_work_units_per_request=30),
+        ResearchUsageCounters(),
+        31,
+    )
+
+    internal = api_main._usage_limit_exception(decision)
+    assert internal.status_code == 400
+    assert internal.detail["code"] == "research_request_agent_limit_exceeded"
+    assert internal.headers is None
+
+    public = _public_http_exception(internal)
+    assert public.status_code == 400
+    assert public.detail["code"] == "INVALID_REQUEST"
+    assert public.detail["details"]["reason"] == "request_work_unit_limit"
+
+
 def test_zero_window_quotas_disable_only_window_limits():
     decision = evaluate_research_usage(
         _limits(requests_per_minute=0, requests_per_day=0, work_units_per_day=0),
@@ -135,6 +155,13 @@ def test_settings_default_to_bounded_research_usage():
     assert settings.api_research_daily_request_quota == 24
     assert settings.api_research_daily_agent_quota == 600
     assert settings.api_research_max_agents_per_request == 36
+
+
+def test_usage_reservation_expires_obsolete_windows():
+    source = inspect.getsource(PostgresAuditRepository.reserve_research_usage)
+    assert "DELETE FROM api_usage_windows" in source
+    assert "window_kind='minute' AND window_start < $1" in source
+    assert "window_kind='day' AND window_start < $2" in source
 
 
 @pytest.mark.asyncio
