@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+import app.api.main as api_main
 from app.api.auth import (
     AuthPrincipal,
     authenticate_api_key,
@@ -9,7 +10,7 @@ from app.api.auth import (
     new_client_request_id,
     request_id_belongs_to_client,
 )
-from app.api.idempotency import scoped_idempotency_key_hash
+from app.api.idempotency import hash_idempotency_key, scoped_idempotency_key_hash
 from app.api.main import require_api_key
 from app.api.public_v1 import require_public_api_key
 from app.core.settings import Settings
@@ -84,6 +85,13 @@ def test_request_ids_are_bound_to_client_namespace():
     assert request_id_belongs_to_client(second_id, "client-a") is False
 
 
+def test_legacy_report_id_shapes_cover_prior_research_and_analyze_ids():
+    assert api_main._is_legacy_public_request_id("req_" + "a" * 12) is True
+    assert api_main._is_legacy_public_request_id("req_" + "b" * 16) is True
+    assert api_main._is_legacy_public_request_id("req_" + "c" * 11) is False
+    assert api_main._is_legacy_public_request_id("req_" + "d" * 17) is False
+
+
 def test_idempotency_key_hashes_are_scoped_per_client():
     raw_key = "same-idempotency-key"
     first = scoped_idempotency_key_hash("client-a", raw_key)
@@ -93,6 +101,22 @@ def test_idempotency_key_hashes_are_scoped_per_client():
     assert first != second
     assert first == repeated
     assert len(first) == 64
+
+
+def test_single_client_cutover_preserves_legacy_idempotency_namespace(monkeypatch):
+    principal = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
+    normalized_key = "existing-retry-key"
+
+    monkeypatch.setattr(api_main, "_legacy_report_ids_allowed", lambda: True)
+    assert api_main._idempotency_key_hash(principal, normalized_key) == hash_idempotency_key(
+        normalized_key
+    )
+
+    monkeypatch.setattr(api_main, "_legacy_report_ids_allowed", lambda: False)
+    assert api_main._idempotency_key_hash(principal, normalized_key) == scoped_idempotency_key_hash(
+        principal.client_id,
+        normalized_key,
+    )
 
 
 def test_public_report_endpoint_hides_cross_client_report_ids():
