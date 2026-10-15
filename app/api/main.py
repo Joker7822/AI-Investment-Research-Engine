@@ -144,13 +144,6 @@ def _research_usage_limits() -> ResearchUsageLimits:
 
 
 def _usage_limit_exception(decision: ResearchUsageDecision) -> HTTPException:
-    codes = {
-        "minute_request_limit": "research_rate_limit_exceeded",
-        "daily_request_quota": "research_daily_request_quota_exceeded",
-        "daily_work_unit_quota": "research_daily_agent_quota_exceeded",
-        "request_work_unit_limit": "research_request_agent_limit_exceeded",
-    }
-    code = codes.get(decision.reason, "research_usage_limit_exceeded")
     details = {
         "reason": decision.reason,
         "work_units": decision.work_units,
@@ -160,6 +153,22 @@ def _usage_limit_exception(decision: ResearchUsageDecision) -> HTTPException:
         "daily_work_units": decision.daily_work_units,
         "retry_after_seconds": decision.retry_after_seconds,
     }
+    if decision.reason == "request_work_unit_limit":
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "research_request_agent_limit_exceeded",
+                "message": "Research request exceeds the configured agent limit",
+                "details": details,
+            },
+        )
+
+    codes = {
+        "minute_request_limit": "research_rate_limit_exceeded",
+        "daily_request_quota": "research_daily_request_quota_exceeded",
+        "daily_work_unit_quota": "research_daily_agent_quota_exceeded",
+    }
+    code = codes.get(decision.reason, "research_usage_limit_exceeded")
     headers = None
     if decision.retry_after_seconds is not None:
         headers = {"Retry-After": str(decision.retry_after_seconds)}
