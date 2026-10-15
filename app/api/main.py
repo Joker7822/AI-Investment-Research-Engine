@@ -310,7 +310,6 @@ async def research(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: AuthPrincipal = Depends(require_api_key),
 ) -> ResearchResponse:
-    _require_research_runtime()
     if idempotency_key is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -328,6 +327,7 @@ async def research(
         ) from exc
 
     request = _assign_or_validate_request_id(request, principal)
+    _require_research_runtime()
     request_hash = research_request_hash(request)
     key_hash = scoped_idempotency_key_hash(principal.client_id, normalized_key)
     request_id = str(request.request_id)
