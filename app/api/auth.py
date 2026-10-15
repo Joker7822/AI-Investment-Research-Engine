@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -14,6 +15,7 @@ from app.core.settings import Settings
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_REQUEST_ID_RE = re.compile(r"^req_([0-9a-f]{16})_([0-9a-f]{16})$")
 
 
 @dataclass(frozen=True)
@@ -95,10 +97,9 @@ def authenticate_api_key(
 
     if not api_key:
         code = "UNAUTHORIZED" if public_contract else "missing_api_key"
-        message = "X-API-Key is required"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": code, "message": message},
+            detail={"code": code, "message": "X-API-Key is required"},
         )
 
     candidate = hash_api_key(api_key)
@@ -111,6 +112,21 @@ def authenticate_api_key(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={"code": code, "message": "API key is invalid"},
     )
+
+
+def client_request_namespace(client_id: str) -> str:
+    return hashlib.sha256(f"request-owner:{client_id}".encode("utf-8")).hexdigest()[:16]
+
+
+def new_client_request_id(client_id: str) -> str:
+    return f"req_{client_request_namespace(client_id)}_{uuid.uuid4().hex[:16]}"
+
+
+def request_id_belongs_to_client(request_id: str, client_id: str) -> bool:
+    if client_id == "local-development":
+        return True
+    match = _REQUEST_ID_RE.fullmatch(request_id)
+    return bool(match and hmac.compare_digest(match.group(1), client_request_namespace(client_id)))
 
 
 def build_api_key_dependency(settings: Settings) -> Callable:
