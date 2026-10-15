@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 
+import pytest
 from fastapi import HTTPException
 
+import app.api.main as api_main
+from app.api.auth import AuthPrincipal
 from app.api.public_v1 import _public_http_exception
 from app.core.settings import Settings
 from app.core.usage import (
@@ -9,6 +12,7 @@ from app.core.usage import (
     ResearchUsageLimits,
     evaluate_research_usage,
 )
+from app.domain.schemas import AnalysisRequest, AssetRef
 
 
 def _limits(**overrides) -> ResearchUsageLimits:
@@ -62,7 +66,7 @@ def test_usage_rejects_daily_request_quota():
     assert decision.allowed is False
     assert decision.reason == "daily_request_quota"
     assert decision.limit == 24
-    assert decision.retry_after_seconds is not None
+    assert decision.retry_after_seconds == 74400
 
 
 def test_usage_rejects_daily_agent_work_unit_quota():
@@ -76,6 +80,31 @@ def test_usage_rejects_daily_agent_work_unit_quota():
     assert decision.allowed is False
     assert decision.reason == "daily_work_unit_quota"
     assert decision.limit == 600
+
+
+def test_usage_retry_after_uses_longest_active_window():
+    decision = evaluate_research_usage(
+        _limits(),
+        ResearchUsageCounters(minute_requests=3, daily_requests=24, daily_work_units=590),
+        20,
+        now=datetime(2026, 10, 15, 3, 20, 42, tzinfo=timezone.utc),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "daily_request_quota"
+    assert decision.retry_after_seconds == 74358
+
+
+def test_daily_retry_after_rounds_up_to_reset_boundary():
+    decision = evaluate_research_usage(
+        _limits(),
+        ResearchUsageCounters(minute_requests=0, daily_requests=24, daily_work_units=0),
+        1,
+        now=datetime(2026, 10, 15, 23, 59, 58, 200000, tzinfo=timezone.utc),
+    )
+
+    assert decision.allowed is False
+    assert decision.retry_after_seconds == 2
 
 
 def test_usage_rejects_single_request_above_agent_cap_before_window_limits():
@@ -106,6 +135,24 @@ def test_settings_default_to_bounded_research_usage():
     assert settings.api_research_daily_request_quota == 24
     assert settings.api_research_daily_agent_quota == 600
     assert settings.api_research_max_agents_per_request == 36
+
+
+@pytest.mark.asyncio
+async def test_legacy_analysis_fails_closed_without_durable_usage_storage(monkeypatch):
+    monkeypatch.setattr(api_main.settings, "database_url", None)
+    monkeypatch.setattr(api_main.settings, "openai_api_key", "configured-for-test")
+    request = AnalysisRequest(
+        as_of=datetime(2026, 10, 15, 3, 20, tzinfo=timezone.utc),
+        asset=AssetRef(ticker="TEST", currency="USD", region="US"),
+        user_question="Analyze TEST",
+    )
+    principal = AuthPrincipal(client_id="local-development", key_hash="auth-disabled")
+
+    with pytest.raises(HTTPException) as captured:
+        await api_main.analyze_legacy(request, principal)
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail["code"] == "audit_database_required"
 
 
 def test_public_contract_maps_internal_usage_limit_to_stable_rate_limited_error():
