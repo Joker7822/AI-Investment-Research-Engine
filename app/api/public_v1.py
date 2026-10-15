@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +9,15 @@ from fastapi.encoders import jsonable_encoder
 from openai import OpenAIError, RateLimitError
 from pydantic import ValidationError
 
-from app.api.auth import api_key_header, configured_api_key_hashes, hash_api_key
+from app.api.auth import (
+    AuthPrincipal,
+    api_key_header,
+    authenticate_api_key,
+    configured_api_principals,
+    new_client_request_id,
+    request_id_belongs_to_client,
+)
+from app.api.idempotency import scoped_idempotency_key_hash
 from app.api.main import (
     get_report as internal_get_report,
     research as internal_research,
@@ -40,25 +47,15 @@ from app.domain.schemas import (
 
 logger = logging.getLogger(__name__)
 public_router = APIRouter(prefix="/api/v1", tags=["public"])
-_PUBLIC_API_KEY_HASHES = configured_api_key_hashes(settings)
+_CONFIGURED_PUBLIC_PRINCIPALS = configured_api_principals(settings)
+_ALLOW_LEGACY_REPORT_IDS = len(_CONFIGURED_PUBLIC_PRINCIPALS) == 1
 
 
-async def require_public_api_key(api_key: str | None = Security(api_key_header)) -> str:
-    """Stable public authentication contract, independent of internal error names."""
-    if not _PUBLIC_API_KEY_HASHES:
-        return "auth-disabled"
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-API-Key is required"},
-        )
-    candidate = hash_api_key(api_key)
-    if not any(hmac.compare_digest(candidate, allowed) for allowed in _PUBLIC_API_KEY_HASHES):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "API key is invalid"},
-        )
-    return candidate
+async def require_public_api_key(
+    api_key: str | None = Security(api_key_header),
+) -> AuthPrincipal:
+    """Authenticate a public API key and resolve its stable client identity."""
+    return authenticate_api_key(settings, api_key, public_contract=True)
 
 
 def _asset(payload: PublicResearchRequest | PublicDCFRequest) -> AssetRef:
@@ -71,8 +68,13 @@ def _asset(payload: PublicResearchRequest | PublicDCFRequest) -> AssetRef:
     )
 
 
-def _analysis_request(payload: PublicResearchRequest) -> AnalysisRequest:
+def _analysis_request(
+    payload: PublicResearchRequest,
+    *,
+    request_id: str | None = None,
+) -> AnalysisRequest:
     return AnalysisRequest(
+        request_id=request_id,
         as_of=payload.as_of or datetime.now(timezone.utc),
         asset=_asset(payload),
         user_question=payload.question,
@@ -151,6 +153,18 @@ def _ai_unavailable(exc: Exception) -> HTTPException:
     )
 
 
+def _can_read_report(principal: AuthPrincipal, request_id: str) -> bool:
+    if request_id_belongs_to_client(request_id, principal.client_id):
+        return True
+    # Backward compatibility for reports created before tenant-namespaced IDs.
+    # It is safe only while exactly one production principal is configured.
+    return _ALLOW_LEGACY_REPORT_IDS and not request_id.startswith("req_") or (
+        _ALLOW_LEGACY_REPORT_IDS
+        and request_id.startswith("req_")
+        and len(request_id.split("_")) == 2
+    )
+
+
 @public_router.get("/health", response_model=PublicHealthResponse)
 async def public_health() -> PublicHealthResponse:
     return PublicHealthResponse(service=settings.api_name, version=settings.api_version)
@@ -159,7 +173,7 @@ async def public_health() -> PublicHealthResponse:
 @public_router.post("/route", response_model=PublicRouteResponse)
 async def public_route(
     payload: PublicResearchRequest,
-    _: str = Depends(require_public_api_key),
+    _: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicRouteResponse:
     try:
         plan = internal_router.route(_analysis_request(payload))
@@ -182,11 +196,17 @@ async def public_route(
 async def public_research(
     payload: PublicResearchRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
-    stable_key = idempotency_key or f"public-{uuid.uuid4().hex}"
+    client_request_id = new_client_request_id(principal.client_id)
+    caller_key = idempotency_key or f"public-{uuid.uuid4().hex}"
+    stable_key = scoped_idempotency_key_hash(principal.client_id, caller_key)
     try:
-        result = await internal_research(_analysis_request(payload), stable_key, principal)
+        result = await internal_research(
+            _analysis_request(payload, request_id=client_request_id),
+            stable_key,
+            principal,
+        )
     except HTTPException as exc:
         raise _public_http_exception(exc) from exc
     except RateLimitError as exc:
@@ -205,8 +225,15 @@ async def public_research(
 @public_router.get("/reports/{request_id}", response_model=PublicResearchResponse)
 async def public_report(
     request_id: str,
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
+    if not _can_read_report(principal, request_id):
+        # Deliberately return the same response as a missing report so callers
+        # cannot enumerate another client's report IDs.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "REPORT_NOT_FOUND", "message": "Report was not found"},
+        )
     try:
         result = await internal_get_report(request_id, principal)
     except HTTPException as exc:
@@ -226,7 +253,7 @@ async def public_report(
 @public_router.post("/valuation/dcf", response_model=PublicDCFResponse)
 async def public_dcf(
     payload: PublicDCFRequest,
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicDCFResponse:
     as_of = payload.as_of or datetime.now(timezone.utc)
     scenario_kwargs = {
