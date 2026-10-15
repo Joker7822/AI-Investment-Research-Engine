@@ -1,22 +1,49 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _quota_exhausted, app
 
 
-def test_root_landing_explains_api_entrypoints():
+def test_root_serves_browser_research_app():
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    body = response.text
+    assert "Investment Research" in body
+    assert "AI投資分析を実行" in body
+    assert "/v1/research" in body
+    assert "sessionStorage" in body
+    assert "localStorage" not in body
+
+    head = client.head("/")
+    assert head.status_code == 200
+
+
+def test_machine_readable_metadata_retains_api_entrypoints():
+    client = TestClient(app)
+    response = client.get("/v1/meta")
+    assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
+    assert body["links"]["web_app"] == "/"
     assert body["links"]["health"] == "/v1/health"
     assert body["links"]["readiness"] == "/v1/ready"
     assert body["links"]["docs"] == "/docs"
     assert body["endpoints"]["research"] == "POST /v1/research"
     assert body["endpoints"]["valuation"] == "POST /v1/valuation"
+
+
+def test_openai_quota_exhaustion_is_detected_without_exposing_provider_payload():
+    error = SimpleNamespace(code="credit_balance_exhausted", body={})
+    assert _quota_exhausted(error) is True
+    limited = SimpleNamespace(code="rate_limit_exceeded", body={})
+    assert _quota_exhausted(limited) is False
 
 
 def test_readiness_fails_closed_without_production_secrets():
@@ -61,6 +88,7 @@ def test_render_blueprint_wires_production_dependencies():
 
 def test_production_dockerfile_contains_runtime_assets_and_nonroot_user():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "COPY app /app/app" in dockerfile
     assert "COPY db /app/db" in dockerfile
     assert "COPY scripts /app/scripts" in dockerfile
     assert "USER app" in dockerfile
