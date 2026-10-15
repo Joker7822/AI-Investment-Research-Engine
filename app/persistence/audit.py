@@ -6,7 +6,7 @@ import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import Path
 from typing import Literal
 
@@ -246,14 +246,17 @@ class PostgresAuditRepository(AuditRepository):
         limits: ResearchUsageLimits,
     ) -> ResearchUsageDecision:
         """Atomically admit one expensive research request for a client."""
-        now = datetime.now(timezone.utc)
-        minute_start = now.replace(second=0, microsecond=0)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await self._ensure_schema(conn)
             async with conn.transaction():
+                db_now = await conn.fetchval("SELECT now()")
+                if db_now is None:
+                    raise RuntimeError("database clock is unavailable")
+                now = db_now.astimezone(timezone.utc)
+                minute_start = now.replace(second=0, microsecond=0)
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
                 await conn.executemany(
                     """
                     INSERT INTO api_usage_windows (
