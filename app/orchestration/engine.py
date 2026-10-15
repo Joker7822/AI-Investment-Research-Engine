@@ -4,12 +4,14 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
-from agents import Runner, trace
+from agents import Agent, trace
 
 from app.core.settings import Settings
 from app.domain.prompts import CIO_PROMPT
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport, Stance
+from app.orchestration.model_runtime import ModelRuntime
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter, RoutePlan
 from app.orchestration.scoring import aggregate_scores
@@ -37,6 +39,7 @@ class InvestmentAnalysisEngine:
         self.registry = registry
         self.router = router
         self.provider = provider
+        self.model_runtime = ModelRuntime(settings)
         self._semaphore = asyncio.Semaphore(settings.max_parallel_agents)
 
     async def _run_agent(
@@ -45,13 +48,23 @@ class InvestmentAnalysisEngine:
         req: AnalysisRequest,
         prior_results: list[AgentAnalysis] | None = None,
     ) -> AgentAnalysis:
-        agent = self.registry.build(agent_id, req.as_of.isoformat())
         payload = {
             "request": req.model_dump(mode="json"),
             "prior_results": [r.model_dump(mode="json") for r in (prior_results or [])],
         }
+
+        def build_agent(model_override: Any | None):
+            return self.registry.build(
+                agent_id,
+                req.as_of.isoformat(),
+                model_override=model_override,
+            )
+
         async with self._semaphore:
-            result = await Runner.run(agent, json.dumps(payload, ensure_ascii=False))
+            result = await self.model_runtime.run(
+                build_agent,
+                json.dumps(payload, ensure_ascii=False),
+            )
         parsed = result.final_output
         if not isinstance(parsed, AgentAnalysis):
             raise TypeError(f"{agent_id} returned unexpected type: {type(parsed)!r}")
@@ -85,6 +98,18 @@ class InvestmentAnalysisEngine:
                 outputs.append(item)
         return outputs
 
+    def _build_cio_agent(self, model_override: Any | None):
+        kwargs = {
+            "name": "A100 Chief Investment Officer",
+            "instructions": CIO_PROMPT,
+            "output_type": CIOJudgement,
+        }
+        if model_override is not None:
+            kwargs["model"] = model_override
+        elif self.settings.openai_agent_model:
+            kwargs["model"] = self.settings.openai_agent_model
+        return Agent(**kwargs)
+
     async def analyze(self, req: AnalysisRequest) -> EngineResult:
         req = await self.provider.enrich(req)
         request_id = req.request_id or f"req_{uuid.uuid4().hex[:12]}"
@@ -104,17 +129,6 @@ class InvestmentAnalysisEngine:
 
             aggregate = aggregate_scores(specialists)
 
-            from agents import Agent
-
-            kwargs = {
-                "name": "A100 Chief Investment Officer",
-                "instructions": CIO_PROMPT,
-                "output_type": CIOJudgement,
-            }
-            if self.settings.openai_agent_model:
-                kwargs["model"] = self.settings.openai_agent_model
-            cio_agent = Agent(**kwargs)
-
             cio_input = {
                 "request": req.model_dump(mode="json"),
                 "selected_agents": list(route.all_agents),
@@ -126,7 +140,10 @@ class InvestmentAnalysisEngine:
                     "do_not_invent_price_targets": True,
                 },
             }
-            cio_result = await Runner.run(cio_agent, json.dumps(cio_input, ensure_ascii=False))
+            cio_result = await self.model_runtime.run(
+                self._build_cio_agent,
+                json.dumps(cio_input, ensure_ascii=False),
+            )
             judgement = cio_result.final_output
             if not isinstance(judgement, CIOJudgement):
                 raise TypeError(f"CIO returned unexpected type: {type(judgement)!r}")
