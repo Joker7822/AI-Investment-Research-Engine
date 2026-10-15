@@ -21,6 +21,7 @@ def _metadata_payload() -> dict:
     links = {
         "web_app": "/",
         "health": "/api/v1/health",
+        "meta": "/api/v1/meta",
         "readiness": "/v1/ready",
         "public_api_base": "/api/v1",
     }
@@ -83,8 +84,9 @@ async def web_app_head() -> Response:
 
 
 @app.get("/v1/meta", include_in_schema=False)
+@app.get("/api/v1/meta", include_in_schema=False)
 async def api_metadata() -> JSONResponse:
-    """Machine-readable landing metadata retained for API clients."""
+    """Machine-readable landing metadata for public clients and legacy compatibility."""
     return JSONResponse(content=_metadata_payload())
 
 
