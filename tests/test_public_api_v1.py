@@ -30,6 +30,17 @@ def test_public_health_hides_internal_readiness_details():
     assert set(body) == {"status", "service", "version"}
 
 
+def test_public_metadata_describes_only_stable_entrypoints():
+    response = client.get("/api/v1/meta")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["links"]["public_api_base"] == "/api/v1"
+    assert body["links"]["meta"] == "/api/v1/meta"
+    assert body["endpoints"]["research"] == "POST /api/v1/research"
+    assert body["endpoints"]["valuation_dcf"] == "POST /api/v1/valuation/dcf"
+    assert body["compatibility"]["legacy_base"] == "/v1"
+
+
 def test_public_route_uses_stable_counts_not_internal_agent_ids():
     response = client.post("/api/v1/route", json=_research_payload())
     assert response.status_code == 200
