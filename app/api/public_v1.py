@@ -35,6 +35,11 @@ from app.domain.schemas import (
     InvestmentReport,
     ValuationAssumptions,
 )
+from app.orchestration.model_runtime import (
+    ModelProviderMode,
+    ModelProviderUnavailableError,
+    use_model_provider,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -134,13 +139,19 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
     )
 
 
-def _ai_unavailable(exc: Exception) -> HTTPException:
-    logger.warning("Public research AI dependency unavailable: %s", type(exc).__name__)
+def _ai_unavailable(exc: Exception, *, provider: str | None = None) -> HTTPException:
+    logger.warning(
+        "Public research AI dependency unavailable: provider=%s reason=%s",
+        provider or "unknown",
+        type(exc).__name__,
+    )
+    details = {"provider": provider} if provider in {"openai", "custom"} else None
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "code": "AI_CAPACITY_UNAVAILABLE",
             "message": "AI analysis is temporarily unavailable",
+            "details": details,
         },
     )
 
@@ -176,17 +187,22 @@ async def public_route(
 async def public_research(
     payload: PublicResearchRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ai_provider: ModelProviderMode = Header(default="auto", alias="X-AI-Provider"),
     principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
+    """Run research using auto, OpenAI-only, or custom-API-only model selection."""
     stable_key = idempotency_key or f"public-{uuid.uuid4().hex}"
     try:
-        result = await internal_research(_analysis_request(payload), stable_key, principal)
+        with use_model_provider(ai_provider):
+            result = await internal_research(_analysis_request(payload), stable_key, principal)
+    except ModelProviderUnavailableError as exc:
+        raise _ai_unavailable(exc, provider=exc.provider) from exc
     except HTTPException as exc:
         raise _public_http_exception(exc) from exc
     except RateLimitError as exc:
-        raise _ai_unavailable(exc) from exc
+        raise _ai_unavailable(exc, provider=ai_provider) from exc
     except OpenAIError as exc:
-        raise _ai_unavailable(exc) from exc
+        raise _ai_unavailable(exc, provider=ai_provider) from exc
     except Exception as exc:
         logger.exception("Public research failed")
         raise HTTPException(
