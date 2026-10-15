@@ -19,6 +19,7 @@ from app.api.auth import (
     request_id_belongs_to_client,
 )
 from app.api.idempotency import (
+    hash_idempotency_key,
     research_request_hash,
     scoped_idempotency_key_hash,
     validate_idempotency_key,
@@ -108,7 +109,7 @@ def _is_legacy_public_request_id(request_id: str) -> bool:
     return (
         len(parts) == 2
         and parts[0] == "req"
-        and len(parts[1]) == 16
+        and len(parts[1]) in {12, 16}
         and all(ch in "0123456789abcdef" for ch in parts[1])
     )
 
@@ -117,6 +118,17 @@ def _principal_can_access_request_id(principal: AuthPrincipal, request_id: str) 
     if request_id_belongs_to_client(request_id, principal.client_id):
         return True
     return _legacy_report_ids_allowed() and _is_legacy_public_request_id(request_id)
+
+
+def _idempotency_key_hash(principal: AuthPrincipal, normalized_key: str) -> str:
+    # Pre-tenant idempotency rows contain only sha256(normalized_key), so there is
+    # no safe way to assign them among multiple clients. While exactly one client
+    # exists, retain that namespace to preserve replay/conflict semantics. The
+    # moment multiple distinct clients are configured, switch to client-scoped
+    # hashes so tenants cannot collide on the same caller-provided key.
+    if _legacy_report_ids_allowed():
+        return hash_idempotency_key(normalized_key)
+    return scoped_idempotency_key_hash(principal.client_id, normalized_key)
 
 
 def _assign_or_validate_request_id(
@@ -329,7 +341,7 @@ async def research(
     request = _assign_or_validate_request_id(request, principal)
     _require_research_runtime()
     request_hash = research_request_hash(request)
-    key_hash = scoped_idempotency_key_hash(principal.client_id, normalized_key)
+    key_hash = _idempotency_key_hash(principal, normalized_key)
     request_id = str(request.request_id)
 
     reservation = await audit_repository.reserve_idempotency(
