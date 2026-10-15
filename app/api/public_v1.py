@@ -6,11 +6,20 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Security, status
 from fastapi.encoders import jsonable_encoder
-from openai import OpenAIError, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from pydantic import ValidationError
 
 from app.api.auth import AuthPrincipal, api_key_header, authenticate_api_key
 from app.api.main import (
+    engine,
     get_report as internal_get_report,
     research as internal_research,
     router as internal_router,
@@ -19,6 +28,8 @@ from app.api.main import (
 )
 from app.api.models import ValuationRequest
 from app.api.public_models import (
+    PublicAICustomProbeResponse,
+    PublicAIProviderStatusResponse,
     PublicAnalysisStats,
     PublicDCFRequest,
     PublicDCFResponse,
@@ -156,9 +167,91 @@ def _ai_unavailable(exc: Exception, *, provider: str | None = None) -> HTTPExcep
     )
 
 
+def _custom_probe_failure(
+    code: str,
+    message: str,
+    *,
+    status_code: int = status.HTTP_502_BAD_GATEWAY,
+    upstream_status: int | None = None,
+) -> HTTPException:
+    details = {"upstream_status": upstream_status} if upstream_status is not None else None
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message, "details": details},
+    )
+
+
 @public_router.get("/health", response_model=PublicHealthResponse)
 async def public_health() -> PublicHealthResponse:
     return PublicHealthResponse(service=settings.api_name, version=settings.api_version)
+
+
+@public_router.get("/ai/status", response_model=PublicAIProviderStatusResponse)
+async def public_ai_status(
+    _: AuthPrincipal = Depends(require_public_api_key),
+) -> PublicAIProviderStatusResponse:
+    """Validate the API key and report provider configuration without exposing secrets."""
+    custom_configured = engine.model_runtime.fallback_configured
+    return PublicAIProviderStatusResponse(
+        openai_configured=engine.model_runtime.supports("openai"),
+        custom_configured=custom_configured,
+        custom_model=str(settings.custom_llm_model) if custom_configured else None,
+    )
+
+
+@public_router.post("/ai/custom/test", response_model=PublicAICustomProbeResponse)
+async def public_custom_ai_probe(
+    _: AuthPrincipal = Depends(require_public_api_key),
+) -> PublicAICustomProbeResponse:
+    """Exercise the exact custom structured-output path used by production agents."""
+    try:
+        model = await engine.model_runtime.probe_custom()
+    except ModelProviderUnavailableError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_NOT_CONFIGURED",
+            "Custom AI API is not fully configured",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    except AuthenticationError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_AUTH_FAILED",
+            "Custom AI API rejected its configured credential",
+        ) from exc
+    except PermissionDeniedError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_FORBIDDEN",
+            "Custom AI API denied access to the configured model",
+        ) from exc
+    except RateLimitError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_RATE_LIMITED",
+            "Custom AI API is rate limited",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    except APITimeoutError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_TIMEOUT",
+            "Custom AI API timed out",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        ) from exc
+    except APIConnectionError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_UNREACHABLE",
+            "Custom AI API could not be reached",
+        ) from exc
+    except APIStatusError as exc:
+        raise _custom_probe_failure(
+            "CUSTOM_API_UPSTREAM_ERROR",
+            "Custom AI API returned an error response",
+            upstream_status=exc.status_code,
+        ) from exc
+    except Exception as exc:
+        logger.exception("Custom AI compatibility probe failed")
+        raise _custom_probe_failure(
+            "CUSTOM_API_INCOMPATIBLE",
+            "Custom AI API is not compatible with the required structured-output contract",
+        ) from exc
+    return PublicAICustomProbeResponse(model=model)
 
 
 @public_router.post("/route", response_model=PublicRouteResponse)
