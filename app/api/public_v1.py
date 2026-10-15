@@ -17,7 +17,7 @@ from app.api.auth import (
     new_client_request_id,
     request_id_belongs_to_client,
 )
-from app.api.idempotency import scoped_idempotency_key_hash
+from app.api.idempotency import scoped_idempotency_key_hash, validate_idempotency_key
 from app.api.main import (
     get_report as internal_get_report,
     research as internal_research,
@@ -48,7 +48,9 @@ from app.domain.schemas import (
 logger = logging.getLogger(__name__)
 public_router = APIRouter(prefix="/api/v1", tags=["public"])
 _CONFIGURED_PUBLIC_PRINCIPALS = configured_api_principals(settings)
-_ALLOW_LEGACY_REPORT_IDS = len(_CONFIGURED_PUBLIC_PRINCIPALS) == 1
+_ALLOW_LEGACY_REPORT_IDS = (
+    len({principal.client_id for principal in _CONFIGURED_PUBLIC_PRINCIPALS}) == 1
+)
 
 
 async def require_public_api_key(
@@ -156,12 +158,15 @@ def _ai_unavailable(exc: Exception) -> HTTPException:
 def _can_read_report(principal: AuthPrincipal, request_id: str) -> bool:
     if request_id_belongs_to_client(request_id, principal.client_id):
         return True
-    # Backward compatibility for reports created before tenant-namespaced IDs.
-    # It is safe only while exactly one production principal is configured.
-    return _ALLOW_LEGACY_REPORT_IDS and not request_id.startswith("req_") or (
-        _ALLOW_LEGACY_REPORT_IDS
-        and request_id.startswith("req_")
-        and len(request_id.split("_")) == 2
+    if not _ALLOW_LEGACY_REPORT_IDS:
+        return False
+    # Public reports created before tenant isolation used `req_<16 hex>` IDs.
+    parts = request_id.split("_")
+    return (
+        len(parts) == 2
+        and parts[0] == "req"
+        and len(parts[1]) == 16
+        and all(ch in "0123456789abcdef" for ch in parts[1])
     )
 
 
@@ -199,8 +204,17 @@ async def public_research(
     principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
     client_request_id = new_client_request_id(principal.client_id)
-    caller_key = idempotency_key or f"public-{uuid.uuid4().hex}"
-    stable_key = scoped_idempotency_key_hash(principal.client_id, caller_key)
+    if idempotency_key is None:
+        normalized_key = f"public-{uuid.uuid4().hex}"
+    else:
+        try:
+            normalized_key = validate_idempotency_key(idempotency_key)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_REQUEST", "message": str(exc)},
+            ) from exc
+    stable_key = scoped_idempotency_key_hash(principal.client_id, normalized_key)
     try:
         result = await internal_research(
             _analysis_request(payload, request_id=client_request_id),
