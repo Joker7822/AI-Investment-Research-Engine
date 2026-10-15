@@ -121,7 +121,7 @@ def test_public_research_hides_missing_database_implementation_detail():
     assert "OPENAI" not in response.text
 
 
-def test_openapi_exposes_public_facade_and_retains_legacy_compatibility():
+def test_openapi_exposes_public_provider_switch_and_legacy_compatibility():
     schema = client.get("/openapi.json").json()
     paths = schema["paths"]
     assert "/api/v1/health" in paths
@@ -130,3 +130,13 @@ def test_openapi_exposes_public_facade_and_retains_legacy_compatibility():
     assert "/api/v1/valuation/dcf" in paths
     assert "/api/v1/reports/{request_id}" in paths
     assert "/v1/research" in paths
+
+    parameters = paths["/api/v1/research"]["post"]["parameters"]
+    provider = next(item for item in parameters if item["name"] == "X-AI-Provider")
+    assert provider["in"] == "header"
+    provider_schema = provider["schema"]
+    if "$ref" in provider_schema:
+        component_name = provider_schema["$ref"].rsplit("/", 1)[-1]
+        provider_schema = schema["components"]["schemas"][component_name]
+    assert set(provider_schema["enum"]) == {"auto", "openai", "custom"}
+    assert provider_schema["default"] == "auto"
