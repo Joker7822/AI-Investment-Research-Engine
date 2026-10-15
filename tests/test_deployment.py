@@ -78,6 +78,10 @@ def test_render_blueprint_wires_production_dependencies():
     assert env["OPENAI_API_KEY"]["sync"] is False
     assert env["PUBLIC_API_KEY_HASHES"]["sync"] is False
     assert env["STRICT_STARTUP_READINESS"]["value"] == "true"
+    assert env["API_RESEARCH_RATE_LIMIT_PER_MINUTE"]["value"] == "3"
+    assert env["API_RESEARCH_DAILY_REQUEST_QUOTA"]["value"] == "24"
+    assert env["API_RESEARCH_DAILY_AGENT_QUOTA"]["value"] == "600"
+    assert env["API_RESEARCH_MAX_AGENTS_PER_REQUEST"]["value"] == "36"
     assert env["WEB_CONCURRENCY"]["value"] == "1"
 
     cron = next(service for service in blueprint["services"] if service["type"] == "cron")
