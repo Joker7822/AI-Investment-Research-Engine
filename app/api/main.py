@@ -34,6 +34,7 @@ from app.api.models import (
     ValuationResponse,
 )
 from app.core.settings import get_settings
+from app.core.usage import ResearchUsageDecision, ResearchUsageLimits
 from app.domain.schemas import AnalysisRequest, InvestmentReport
 from app.orchestration.engine import InvestmentAnalysisEngine
 from app.orchestration.registry import AgentRegistry
@@ -131,6 +132,68 @@ def _idempotency_key_hash(principal: AuthPrincipal, normalized_key: str) -> str:
     if _legacy_report_ids_allowed():
         return hash_idempotency_key(normalized_key)
     return scoped_idempotency_key_hash(principal.client_id, normalized_key)
+
+
+def _research_usage_limits() -> ResearchUsageLimits:
+    return ResearchUsageLimits(
+        requests_per_minute=settings.api_research_rate_limit_per_minute,
+        requests_per_day=settings.api_research_daily_request_quota,
+        work_units_per_day=settings.api_research_daily_agent_quota,
+        max_work_units_per_request=settings.api_research_max_agents_per_request,
+    )
+
+
+def _usage_limit_exception(decision: ResearchUsageDecision) -> HTTPException:
+    details = {
+        "reason": decision.reason,
+        "work_units": decision.work_units,
+        "limit": decision.limit,
+        "minute_requests": decision.minute_requests,
+        "daily_requests": decision.daily_requests,
+        "daily_work_units": decision.daily_work_units,
+        "retry_after_seconds": decision.retry_after_seconds,
+    }
+    if decision.reason == "request_work_unit_limit":
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "research_request_agent_limit_exceeded",
+                "message": "Research request exceeds the configured agent limit",
+                "details": details,
+            },
+        )
+
+    codes = {
+        "minute_request_limit": "research_rate_limit_exceeded",
+        "daily_request_quota": "research_daily_request_quota_exceeded",
+        "daily_work_unit_quota": "research_daily_agent_quota_exceeded",
+    }
+    code = codes.get(decision.reason, "research_usage_limit_exceeded")
+    headers = None
+    if decision.retry_after_seconds is not None:
+        headers = {"Retry-After": str(decision.retry_after_seconds)}
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": code,
+            "message": "Research usage limit reached",
+            "details": details,
+        },
+        headers=headers,
+    )
+
+
+async def _admit_research(request: AnalysisRequest, principal: AuthPrincipal) -> ResearchUsageDecision:
+    plan = router.route(request)
+    work_units = len(plan.all_agents)
+    decision = await audit_repository.reserve_research_usage(
+        principal.client_id,
+        work_units,
+        _research_usage_limits(),
+    )
+    if not decision.allowed:
+        raise _usage_limit_exception(decision)
+    return decision
 
 
 def _assign_or_validate_request_id(
@@ -317,7 +380,11 @@ def _require_research_runtime() -> None:
     "/v1/research",
     response_model=ResearchResponse,
     tags=["research"],
-    responses={401: {"model": ApiErrorResponse}, 409: {"model": ApiErrorResponse}},
+    responses={
+        401: {"model": ApiErrorResponse},
+        409: {"model": ApiErrorResponse},
+        429: {"model": ApiErrorResponse},
+    },
 )
 async def research(
     request: AnalysisRequest,
@@ -396,6 +463,7 @@ async def research(
 
     audit_saved = False
     try:
+        await _admit_research(request, principal)
         result = await engine.analyze(request)
         await audit_repository.save(
             result.request,
@@ -496,18 +564,16 @@ async def route(
     deprecated=True,
     include_in_schema=True,
     tags=["legacy"],
+    responses={429: {"model": ApiErrorResponse}},
 )
 async def analyze_legacy(
     request: AnalysisRequest,
     principal: AuthPrincipal = Depends(require_api_key),
 ) -> InvestmentReport:
     """Backward-compatible endpoint. New integrations should use POST /v1/research."""
-    if not settings.openai_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "agent_runtime_unavailable", "message": "OPENAI_API_KEY is not configured"},
-        )
     request = _assign_or_validate_request_id(request, principal)
+    _require_research_runtime()
+    await _admit_research(request, principal)
     result = await engine.analyze(request)
     await audit_repository.save(
         result.request,

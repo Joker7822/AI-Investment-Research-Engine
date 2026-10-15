@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS api_idempotency (
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_request
     ON api_idempotency(request_id);
 
+-- Per-client admission accounting for expensive research. A work unit is one
+-- selected agent execution. Minute and UTC-day windows are updated atomically.
+CREATE TABLE IF NOT EXISTS api_usage_windows (
+    client_id TEXT NOT NULL,
+    window_kind TEXT NOT NULL CHECK (window_kind IN ('minute','day')),
+    window_start TIMESTAMPTZ NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+    work_units INTEGER NOT NULL DEFAULT 0 CHECK (work_units >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (client_id, window_kind, window_start)
+);
+CREATE INDEX IF NOT EXISTS idx_api_usage_windows_start
+    ON api_usage_windows(window_start);
+
 CREATE TABLE IF NOT EXISTS edinet_filings (
     doc_id TEXT PRIMARY KEY,
     filing_date DATE NOT NULL,

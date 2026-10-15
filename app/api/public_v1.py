@@ -108,6 +108,11 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "invalid_idempotency_key": "INVALID_REQUEST",
         "missing_idempotency_key": "INVALID_REQUEST",
         "invalid_request_id": "INVALID_REQUEST",
+        "research_rate_limit_exceeded": "RATE_LIMITED",
+        "research_daily_request_quota_exceeded": "RATE_LIMITED",
+        "research_daily_agent_quota_exceeded": "RATE_LIMITED",
+        "research_request_agent_limit_exceeded": "INVALID_REQUEST",
+        "research_usage_limit_exceeded": "RATE_LIMITED",
     }
     public_code = mapping.get(internal_code, "ANALYSIS_FAILED")
     messages = {
@@ -115,7 +120,7 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "AI_CAPACITY_UNAVAILABLE": "AI analysis is temporarily unavailable",
         "REPORT_NOT_FOUND": "Report was not found",
         "INVALID_REQUEST": "Request could not be accepted",
-        "RATE_LIMITED": "A matching request is already in progress",
+        "RATE_LIMITED": "Research request is temporarily limited",
         "ANALYSIS_FAILED": "Investment analysis failed",
     }
     return HTTPException(
@@ -125,6 +130,7 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
             "message": messages[public_code],
             "details": detail.get("details") if public_code in {"INVALID_REQUEST", "RATE_LIMITED"} else None,
         },
+        headers=exc.headers,
     )
 
 

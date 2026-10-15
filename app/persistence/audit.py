@@ -6,11 +6,18 @@ import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import timezone
 from pathlib import Path
 from typing import Literal
 
 import asyncpg
 
+from app.core.usage import (
+    ResearchUsageCounters,
+    ResearchUsageDecision,
+    ResearchUsageLimits,
+    evaluate_research_usage,
+)
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport
 from app.orchestration.router import RoutePlan
 
@@ -59,6 +66,15 @@ class NullAuditRepository(AuditRepository):
     async def release_idempotency(self, key_hash: str, request_hash: str) -> None:
         return None
 
+    async def reserve_research_usage(
+        self,
+        client_id: str,
+        work_units: int,
+        limits: ResearchUsageLimits,
+    ) -> ResearchUsageDecision:
+        del client_id
+        return evaluate_research_usage(limits, ResearchUsageCounters(), work_units)
+
 
 def stage_for_agent(agent_id: str, route: RoutePlan) -> str:
     if agent_id in route.specialists:
@@ -83,7 +99,7 @@ def _hash(value) -> str:
 
 
 class PostgresAuditRepository(AuditRepository):
-    """Persist immutable analysis provenance and public-API idempotency state."""
+    """Persist immutable analysis provenance and public-API admission state."""
 
     def __init__(
         self,
@@ -173,7 +189,6 @@ class PostgresAuditRepository(AuditRepository):
                     key_hash,
                 )
                 if row is None:
-                    # Defensive fallback for an unexpected concurrent delete.
                     return IdempotencyReservation("in_progress", None)
                 if row["request_hash"] != request_hash:
                     return IdempotencyReservation("conflict", row["request_id"])
@@ -222,6 +237,108 @@ class PostgresAuditRepository(AuditRepository):
                 key_hash,
                 request_hash,
             )
+
+    async def reserve_research_usage(
+        self,
+        client_id: str,
+        work_units: int,
+        limits: ResearchUsageLimits,
+    ) -> ResearchUsageDecision:
+        """Atomically admit one expensive research request for a client."""
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                db_now = await conn.fetchval("SELECT now()")
+                if db_now is None:
+                    raise RuntimeError("database clock is unavailable")
+                now = db_now.astimezone(timezone.utc)
+                minute_start = now.replace(second=0, microsecond=0)
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                await conn.executemany(
+                    """
+                    INSERT INTO api_usage_windows (
+                        client_id, window_kind, window_start, request_count, work_units
+                    ) VALUES ($1,$2,$3,0,0)
+                    ON CONFLICT (client_id, window_kind, window_start) DO NOTHING
+                    """,
+                    [
+                        (client_id, "minute", minute_start),
+                        (client_id, "day", day_start),
+                    ],
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT window_kind, request_count, work_units
+                    FROM api_usage_windows
+                    WHERE client_id=$1
+                      AND (
+                        (window_kind='minute' AND window_start=$2)
+                        OR (window_kind='day' AND window_start=$3)
+                      )
+                    ORDER BY window_kind
+                    FOR UPDATE
+                    """,
+                    client_id,
+                    minute_start,
+                    day_start,
+                )
+                by_kind = {str(row["window_kind"]): row for row in rows}
+                minute_row = by_kind.get("minute")
+                day_row = by_kind.get("day")
+                if minute_row is None or day_row is None:
+                    raise RuntimeError("usage window reservation state is incomplete")
+
+                counters = ResearchUsageCounters(
+                    minute_requests=int(minute_row["request_count"]),
+                    daily_requests=int(day_row["request_count"]),
+                    daily_work_units=int(day_row["work_units"]),
+                )
+                decision = evaluate_research_usage(
+                    limits,
+                    counters,
+                    work_units,
+                    now=now,
+                )
+                if decision.allowed:
+                    await conn.execute(
+                        """
+                        UPDATE api_usage_windows
+                        SET request_count=request_count+1, updated_at=now()
+                        WHERE client_id=$1 AND window_kind='minute' AND window_start=$2
+                        """,
+                        client_id,
+                        minute_start,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE api_usage_windows
+                        SET request_count=request_count+1,
+                            work_units=work_units+$3,
+                            updated_at=now()
+                        WHERE client_id=$1 AND window_kind='day' AND window_start=$2
+                        """,
+                        client_id,
+                        day_start,
+                        work_units,
+                    )
+
+            # Cleanup is intentionally outside the admission transaction. It never
+            # holds the current day/minute admission locks while waiting on stale
+            # rows, preventing a minute-boundary lock-order cycle. Grace intervals
+            # also avoid contending with admissions that began shortly before a
+            # boundary but have not committed yet.
+            await conn.execute(
+                """
+                DELETE FROM api_usage_windows
+                WHERE (window_kind='minute' AND window_start < $1 - interval '5 minutes')
+                   OR (window_kind='day' AND window_start < $2 - interval '1 day')
+                """,
+                minute_start,
+                day_start,
+            )
+            return decision
 
     async def save(
         self,
