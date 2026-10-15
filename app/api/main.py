@@ -562,12 +562,8 @@ async def analyze_legacy(
     principal: AuthPrincipal = Depends(require_api_key),
 ) -> InvestmentReport:
     """Backward-compatible endpoint. New integrations should use POST /v1/research."""
-    if not settings.openai_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "agent_runtime_unavailable", "message": "OPENAI_API_KEY is not configured"},
-        )
     request = _assign_or_validate_request_id(request, principal)
+    _require_research_runtime()
     await _admit_research(request, principal)
     result = await engine.analyze(request)
     await audit_repository.save(
