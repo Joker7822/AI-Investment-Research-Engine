@@ -25,9 +25,14 @@ class Settings(BaseSettings):
 
     api_name: str = "Investment Research API"
     api_version: str = "1.0.0"
-    # Comma-separated SHA-256 hashes of valid API keys. If blank, auth is disabled
-    # for local development. Production deployments should always configure it.
+    # Backward-compatible comma-separated SHA-256 hashes of valid API keys.
+    # Each legacy hash is deterministically mapped to its own client_id.
     public_api_key_hashes: str | None = None
+    # Optional explicit multi-tenant mapping: comma-separated client_id=sha256 entries.
+    # Example: acme=0123...cdef,internal=abcd...7890
+    # This allows API-key rotation while retaining a stable client_id by assigning
+    # multiple key hashes to the same client_id.
+    public_api_client_keys: str | None = None
     api_docs_enabled: bool = True
     # When enabled, startup fails unless DB connectivity, OpenAI configuration,
     # and public API authentication are all production-ready.
