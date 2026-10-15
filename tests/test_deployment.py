@@ -20,6 +20,9 @@ def test_root_serves_browser_research_app():
     assert "'/api/v1/research'" in body
     assert "'/api/v1/route'" in body
     assert "'/api/v1/valuation/dcf'" in body
+    assert "'/api/v1/ai/status'" in body
+    assert "'/api/v1/ai/custom/test'" in body
+    assert "needsKey: true" in body
     assert "sessionStorage" in body
     assert "localStorage" not in body
 
@@ -56,6 +59,8 @@ def test_machine_readable_metadata_prefers_public_api_entrypoints():
     assert body["links"]["docs"] == "/docs"
     assert body["endpoints"]["research"] == "POST /api/v1/research"
     assert body["endpoints"]["valuation_dcf"] == "POST /api/v1/valuation/dcf"
+    assert body["endpoints"]["ai_status"] == "GET /api/v1/ai/status"
+    assert body["endpoints"]["custom_ai_test"] == "POST /api/v1/ai/custom/test"
     assert body["compatibility"]["legacy_base"] == "/v1"
 
 

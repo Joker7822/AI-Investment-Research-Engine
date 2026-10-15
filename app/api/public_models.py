@@ -104,6 +104,21 @@ class PublicHealthResponse(BaseModel):
     version: str
 
 
+class PublicAIProviderStatusResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    authenticated: Literal[True] = True
+    openai_configured: bool
+    custom_configured: bool
+    custom_model: str | None = None
+
+
+class PublicAICustomProbeResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    provider: Literal["custom"] = "custom"
+    model: str
+    structured_output_compatible: Literal[True] = True
+
+
 class PublicDCFRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     market: str | None = Field(default=None, max_length=32)

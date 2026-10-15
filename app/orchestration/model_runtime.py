@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
 
-from agents import OpenAIChatCompletionsModel, RunConfig, Runner, set_tracing_disabled
+from agents import Agent, OpenAIChatCompletionsModel, RunConfig, Runner, set_tracing_disabled
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -17,6 +17,7 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
+from pydantic import BaseModel
 
 from app.core.settings import Settings
 
@@ -28,6 +29,10 @@ _model_provider_override: ContextVar[ModelProviderMode] = ContextVar(
     "model_provider_override",
     default="auto",
 )
+
+
+class _CustomProviderProbeOutput(BaseModel):
+    status: Literal["ok"]
 
 
 class ModelProviderUnavailableError(RuntimeError):
@@ -161,6 +166,28 @@ class ModelRuntime:
             input_text,
             run_config=self._custom_run_config,
         )
+
+    async def probe_custom(self) -> str:
+        """Verify the custom provider using the same structured-output path as agents.
+
+        The probe is intentionally tiny but exercises authentication, endpoint/model
+        compatibility, Chat Completions, and JSON-schema structured output. Secrets
+        and upstream response bodies are never returned by this method.
+        """
+
+        def build_probe(model_override: Any | None):
+            return Agent(
+                name="Custom Provider Probe",
+                instructions="Return status='ok'. Do not add any other information.",
+                model=model_override,
+                output_type=_CustomProviderProbeOutput,
+            )
+
+        result = await self._run_custom(build_probe, "Check custom provider compatibility.")
+        parsed = result.final_output
+        if not isinstance(parsed, _CustomProviderProbeOutput) or parsed.status != "ok":
+            raise RuntimeError("Custom provider returned an incompatible structured output")
+        return str(self.settings.custom_llm_model)
 
     async def run(
         self,

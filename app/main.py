@@ -41,6 +41,8 @@ def _metadata_payload() -> dict:
             "valuation_dcf": "POST /api/v1/valuation/dcf",
             "route": "POST /api/v1/route",
             "report": "GET /api/v1/reports/{request_id}",
+            "ai_status": "GET /api/v1/ai/status",
+            "custom_ai_test": "POST /api/v1/ai/custom/test",
         },
         "compatibility": {
             "legacy_base": "/v1",
@@ -68,11 +70,28 @@ def _web_headers() -> dict[str, str]:
     }
 
 
+def _web_app_content() -> str:
+    """Serve the checked-in UI with the connection button wired to real auth/provider diagnostics."""
+    content = _WEB_APP.read_text(encoding="utf-8")
+    legacy_handler = "$('healthBtn').addEventListener('click', () => callApi('/api/v1/health'));"
+    diagnostic_handler = """$('healthBtn').addEventListener('click', () => {
+        const custom = providerMode() === 'custom';
+        callApi(custom ? '/api/v1/ai/custom/test' : '/api/v1/ai/status', {
+          method: custom ? 'POST' : 'GET',
+          needsKey: true
+        });
+      });"""
+    if legacy_handler not in content:
+        logger.warning("Browser connection-check hook was not found in the bundled UI")
+        return content
+    return content.replace(legacy_handler, diagnostic_handler, 1)
+
+
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def web_app() -> HTMLResponse:
     """Serve the same-origin browser console without exposing server-side secrets."""
     return HTMLResponse(
-        content=_WEB_APP.read_text(encoding="utf-8"),
+        content=_web_app_content(),
         headers=_web_headers(),
     )
 
