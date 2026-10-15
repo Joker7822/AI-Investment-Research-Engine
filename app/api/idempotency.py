@@ -10,6 +10,16 @@ def hash_idempotency_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def scoped_idempotency_key_hash(client_id: str, value: str) -> str:
+    """Hash an idempotency key inside a client namespace.
+
+    The raw key and client_id are never persisted; only this digest is stored.
+    Identical Idempotency-Key strings used by different clients therefore do not
+    conflict in the shared ledger.
+    """
+    return hashlib.sha256(f"{client_id}\x00{value}".encode("utf-8")).hexdigest()
+
+
 def research_request_hash(request: AnalysisRequest) -> str:
     payload = request.model_dump(mode="json")
     # Idempotency identifies the semantic operation, not a caller-selected report ID.
