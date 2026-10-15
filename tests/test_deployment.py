@@ -17,6 +17,9 @@ def test_root_serves_browser_research_app():
     body = response.text
     assert "Investment Research" in body
     assert "AI投資分析を実行" in body
+    assert "'/api/v1/research'" in body
+    assert "'/api/v1/route'" in body
+    assert "'/api/v1/valuation/dcf'" in body
     assert "sessionStorage" in body
     assert "localStorage" not in body
 
@@ -26,12 +29,13 @@ def test_root_serves_browser_research_app():
 
 def test_machine_readable_metadata_prefers_public_api_entrypoints():
     client = TestClient(app)
-    response = client.get("/v1/meta")
+    response = client.get("/api/v1/meta")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
     assert body["links"]["web_app"] == "/"
     assert body["links"]["health"] == "/api/v1/health"
+    assert body["links"]["meta"] == "/api/v1/meta"
     assert body["links"]["public_api_base"] == "/api/v1"
     assert body["links"]["readiness"] == "/v1/ready"
     assert body["links"]["docs"] == "/docs"
