@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.auth import (
@@ -44,6 +45,16 @@ def test_explicit_client_mapping_supports_key_rotation():
     assert {principal.client_id for principal in principals} == {"acme"}
     assert authenticate_api_key(settings, key_one).client_id == "acme"
     assert authenticate_api_key(settings, key_two).client_id == "acme"
+
+
+def test_explicit_mapping_rejects_reserved_local_client_id():
+    settings = Settings(
+        _env_file=None,
+        public_api_key_hashes=None,
+        public_api_client_keys=f"local-development={hash_api_key('secret')}",
+    )
+    with pytest.raises(ValueError, match="reserved local-development"):
+        configured_api_principals(settings)
 
 
 def test_legacy_hash_configuration_gets_stable_pseudonymous_client():
