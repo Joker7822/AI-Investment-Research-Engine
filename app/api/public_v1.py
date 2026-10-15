@@ -111,7 +111,7 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "research_rate_limit_exceeded": "RATE_LIMITED",
         "research_daily_request_quota_exceeded": "RATE_LIMITED",
         "research_daily_agent_quota_exceeded": "RATE_LIMITED",
-        "research_request_agent_limit_exceeded": "RATE_LIMITED",
+        "research_request_agent_limit_exceeded": "INVALID_REQUEST",
         "research_usage_limit_exceeded": "RATE_LIMITED",
     }
     public_code = mapping.get(internal_code, "ANALYSIS_FAILED")
