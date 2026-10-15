@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Security, status
+from fastapi.encoders import jsonable_encoder
 from openai import OpenAIError, RateLimitError
 from pydantic import ValidationError
 
@@ -251,7 +252,7 @@ async def public_dcf(
             detail={
                 "code": "INVALID_REQUEST",
                 "message": "DCF assumptions are invalid",
-                "details": exc.errors(include_url=False),
+                "details": jsonable_encoder(exc.errors(include_url=False)),
             },
         ) from exc
 
