@@ -21,6 +21,22 @@ def _research_payload() -> dict:
     }
 
 
+def _dcf_payload() -> dict:
+    return {
+        "symbol": "TEST",
+        "market": "NYSE",
+        "currency": "USD",
+        "as_of": "2026-10-15T02:30:00Z",
+        "cash_flow_basis": "fcff",
+        "base_fcf": "100",
+        "growth_rates": ["0.10", "0.08", "0.06"],
+        "discount_rate": "0.10",
+        "terminal_growth": "0.02",
+        "net_debt": "20",
+        "diluted_shares": "10",
+    }
+
+
 def test_public_health_hides_internal_readiness_details():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -62,23 +78,17 @@ def test_public_validation_uses_stable_error_code():
     assert body["error"]["request_id"]
 
 
-def test_public_dcf_wraps_deterministic_valuation():
+def test_public_rejects_whitespace_only_required_fields():
     response = client.post(
-        "/api/v1/valuation/dcf",
-        json={
-            "symbol": "TEST",
-            "market": "NYSE",
-            "currency": "USD",
-            "as_of": "2026-10-15T02:30:00Z",
-            "cash_flow_basis": "fcff",
-            "base_fcf": "100",
-            "growth_rates": ["0.10", "0.08", "0.06"],
-            "discount_rate": "0.10",
-            "terminal_growth": "0.02",
-            "net_debt": "20",
-            "diluted_shares": "10",
-        },
+        "/api/v1/route",
+        json={"symbol": "   ", "question": "   ", "horizon": "   ", "modules": ["risk"]},
     )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_public_dcf_wraps_deterministic_valuation():
+    response = client.post("/api/v1/valuation/dcf", json=_dcf_payload())
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "completed"
@@ -86,6 +96,18 @@ def test_public_dcf_wraps_deterministic_valuation():
     assert body["cash_flow_basis"] == "fcff"
     assert body["value_basis"] == "enterprise"
     assert Decimal(body["implied_value_per_share"]) == Decimal("147.9090909090909090909090909090909")
+
+
+def test_public_dcf_semantic_validation_stays_json_safe():
+    payload = _dcf_payload()
+    payload["discount_rate"] = "0.02"
+    payload["terminal_growth"] = "0.03"
+    response = client.post("/api/v1/valuation/dcf", json=payload)
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "INVALID_REQUEST"
+    assert body["error"]["message"] == "DCF assumptions are invalid"
+    assert isinstance(body["error"]["details"], list)
 
 
 def test_public_research_hides_missing_database_implementation_detail():
