@@ -14,6 +14,19 @@ from app.core.settings import Settings
 from app.main import app
 
 
+def _public_research_payload() -> dict:
+    return {
+        "symbol": "AAPL",
+        "market": "NASDAQ",
+        "currency": "USD",
+        "region": "US",
+        "question": "Analyze Apple",
+        "horizon": "12m",
+        "modules": ["fundamental", "risk"],
+        "as_of": "2026-10-15T03:30:00Z",
+    }
+
+
 def test_explicit_client_mapping_supports_key_rotation():
     key_one = "tenant-key-one"
     key_two = "tenant-key-two"
@@ -85,3 +98,21 @@ def test_public_report_endpoint_hides_cross_client_report_ids():
     body = response.json()
     assert body["error"]["code"] == "REPORT_NOT_FOUND"
     assert body["error"]["message"] == "Report was not found"
+
+
+def test_public_research_validates_raw_idempotency_key_before_scoping():
+    principal = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
+    app.dependency_overrides[require_public_api_key] = lambda: principal
+    try:
+        response = TestClient(app).post(
+            "/api/v1/research",
+            json=_public_research_payload(),
+            headers={"Idempotency-Key": "short"},
+        )
+    finally:
+        app.dependency_overrides.pop(require_public_api_key, None)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["code"] == "INVALID_REQUEST"
+    assert "between 8 and 200" in body["error"]["message"]
