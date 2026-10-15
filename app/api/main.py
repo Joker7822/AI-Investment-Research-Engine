@@ -10,10 +10,17 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.auth import build_api_key_dependency, configured_api_key_hashes
+from app.api.auth import (
+    AuthPrincipal,
+    build_api_key_dependency,
+    configured_api_key_hashes,
+    configured_api_principals,
+    new_client_request_id,
+    request_id_belongs_to_client,
+)
 from app.api.idempotency import (
-    hash_idempotency_key,
     research_request_hash,
+    scoped_idempotency_key_hash,
     validate_idempotency_key,
 )
 from app.api.models import (
@@ -89,6 +96,44 @@ audit_repository = (
     if settings.database_url
     else NullAuditRepository()
 )
+
+
+def _legacy_report_ids_allowed() -> bool:
+    principals = configured_api_principals(settings)
+    return len({principal.client_id for principal in principals}) == 1
+
+
+def _is_legacy_public_request_id(request_id: str) -> bool:
+    parts = request_id.split("_")
+    return (
+        len(parts) == 2
+        and parts[0] == "req"
+        and len(parts[1]) == 16
+        and all(ch in "0123456789abcdef" for ch in parts[1])
+    )
+
+
+def _principal_can_access_request_id(principal: AuthPrincipal, request_id: str) -> bool:
+    if request_id_belongs_to_client(request_id, principal.client_id):
+        return True
+    return _legacy_report_ids_allowed() and _is_legacy_public_request_id(request_id)
+
+
+def _assign_or_validate_request_id(
+    request: AnalysisRequest,
+    principal: AuthPrincipal,
+) -> AnalysisRequest:
+    if request.request_id is None:
+        return request.model_copy(update={"request_id": new_client_request_id(principal.client_id)})
+    if _principal_can_access_request_id(principal, request.request_id):
+        return request
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "code": "invalid_request_id",
+            "message": "request_id is not valid for the authenticated client",
+        },
+    )
 
 
 async def verify_strict_startup_readiness() -> None:
@@ -263,7 +308,7 @@ def _require_research_runtime() -> None:
 async def research(
     request: AnalysisRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    _: str = Depends(require_api_key),
+    principal: AuthPrincipal = Depends(require_api_key),
 ) -> ResearchResponse:
     _require_research_runtime()
     if idempotency_key is None:
@@ -282,10 +327,10 @@ async def research(
             detail={"code": "invalid_idempotency_key", "message": str(exc)},
         ) from exc
 
+    request = _assign_or_validate_request_id(request, principal)
     request_hash = research_request_hash(request)
-    key_hash = hash_idempotency_key(normalized_key)
-    request_id = request.request_id or f"req_{uuid.uuid4().hex[:16]}"
-    request = request.model_copy(update={"request_id": request_id})
+    key_hash = scoped_idempotency_key_hash(principal.client_id, normalized_key)
+    request_id = str(request.request_id)
 
     reservation = await audit_repository.reserve_idempotency(
         key_hash,
@@ -311,7 +356,16 @@ async def research(
             },
         )
     if reservation.state == "replay":
-        replay = await audit_repository.get_report(str(reservation.request_id))
+        replay_request_id = str(reservation.request_id)
+        if not _principal_can_access_request_id(principal, replay_request_id):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "idempotency_state_inconsistent",
+                    "message": "Stored idempotency state has invalid ownership",
+                },
+            )
+        replay = await audit_repository.get_report(replay_request_id)
         if replay is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -353,7 +407,7 @@ async def research(
 )
 async def valuation(
     payload: ValuationRequest,
-    _: str = Depends(require_api_key),
+    _: AuthPrincipal = Depends(require_api_key),
 ) -> ValuationResponse:
     request = AnalysisRequest(
         as_of=payload.as_of,
@@ -379,8 +433,13 @@ async def valuation(
 )
 async def get_report(
     request_id: str,
-    _: str = Depends(require_api_key),
+    principal: AuthPrincipal = Depends(require_api_key),
 ) -> ResearchResponse:
+    if not _principal_can_access_request_id(principal, request_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "report_not_found", "message": "Report was not found"},
+        )
     if not settings.database_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -405,7 +464,7 @@ async def get_report(
 )
 async def route(
     request: AnalysisRequest,
-    _: str = Depends(require_api_key),
+    _: AuthPrincipal = Depends(require_api_key),
 ) -> RouteResponse:
     plan = router.route(request)
     return RouteResponse(
@@ -426,7 +485,7 @@ async def route(
 )
 async def analyze_legacy(
     request: AnalysisRequest,
-    _: str = Depends(require_api_key),
+    principal: AuthPrincipal = Depends(require_api_key),
 ) -> InvestmentReport:
     """Backward-compatible endpoint. New integrations should use POST /v1/research."""
     if not settings.openai_api_key:
@@ -434,6 +493,7 @@ async def analyze_legacy(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "agent_runtime_unavailable", "message": "OPENAI_API_KEY is not configured"},
         )
+    request = _assign_or_validate_request_id(request, principal)
     result = await engine.analyze(request)
     await audit_repository.save(
         result.request,
