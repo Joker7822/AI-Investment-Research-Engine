@@ -88,12 +88,15 @@ def test_public_dcf_wraps_deterministic_valuation():
     assert Decimal(body["implied_value_per_share"]) == Decimal("147.9090909090909090909090909090909")
 
 
-def test_public_research_maps_missing_database_to_public_error_contract():
+def test_public_research_hides_missing_database_implementation_detail():
     response = client.post("/api/v1/research", json=_research_payload())
     assert response.status_code == 503
     body = response.json()
     assert body["error"]["code"] == "DATA_UNAVAILABLE"
-    assert "DATABASE_URL" in body["error"]["message"]
+    message = body["error"]["message"]
+    assert message == "Required data services are temporarily unavailable"
+    assert "DATABASE_URL" not in response.text
+    assert "OPENAI" not in response.text
 
 
 def test_openapi_exposes_public_facade_and_retains_legacy_compatibility():
