@@ -19,19 +19,20 @@ PublicAssetType = Literal["equity", "etf", "index", "bond", "fx", "commodity", "
 
 
 class PublicResearchRequest(BaseModel):
-    symbol: str = Field(min_length=1, max_length=32)
-    market: str | None = Field(default=None, max_length=32)
-    currency: str | None = Field(default=None, max_length=8)
-    region: str | None = Field(default=None, max_length=32)
+    symbol: str = Field(min_length=1, max_length=32, description="Market symbol, for example AAPL")
+    market: str | None = Field(default=None, max_length=32, description="Exchange or market, for example NASDAQ")
+    currency: str | None = Field(default=None, max_length=8, description="ISO-style trading currency, for example USD")
+    region: str | None = Field(default=None, max_length=32, description="Geographic market region, for example US")
     asset_type: PublicAssetType = "equity"
-    question: str = Field(min_length=1, max_length=4000)
-    horizon: str = Field(default="12m", min_length=1, max_length=32)
+    question: str = Field(min_length=1, max_length=4000, description="Investment question to answer")
+    horizon: str = Field(default="12m", min_length=1, max_length=32, description="Investment horizon, for example 12m")
     modules: list[PublicModule] = Field(
         default_factory=lambda: ["fundamental", "valuation", "risk"],
         min_length=1,
         max_length=6,
+        description="Analysis modules to activate",
     )
-    as_of: datetime | None = None
+    as_of: datetime | None = Field(default=None, description="Point-in-time cutoff; current UTC time when omitted")
 
     @model_validator(mode="after")
     def normalize(self) -> "PublicResearchRequest":
@@ -45,14 +46,24 @@ class PublicResearchRequest(BaseModel):
         self.question = self.question.strip()
         self.horizon = self.horizon.strip()
         self.modules = list(dict.fromkeys(self.modules))
+        if not self.symbol:
+            raise ValueError("symbol must not be blank")
+        if not self.question:
+            raise ValueError("question must not be blank")
+        if not self.horizon:
+            raise ValueError("horizon must not be blank")
         return self
 
 
 class PublicDecision(BaseModel):
     stance: str
-    score: float = Field(ge=-100.0, le=100.0)
-    confidence: float = Field(ge=0.0, le=1.0)
-    evidence_quality: float = Field(ge=0.0, le=1.0)
+    score: float = Field(
+        ge=-100.0,
+        le=100.0,
+        description="Directional investment score from -100 (bearish) to +100 (bullish)",
+    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence from 0 to 1")
+    evidence_quality: float = Field(ge=0.0, le=1.0, description="Evidence quality from 0 to 1")
 
 
 class PublicAnalysisStats(BaseModel):
@@ -101,7 +112,7 @@ class PublicDCFRequest(BaseModel):
     cash_flow_basis: Literal["fcff", "fcfe"] = "fcff"
     base_fcf: Decimal
     growth_rates: list[Decimal] = Field(min_length=1, max_length=20)
-    discount_rate: Decimal
+    discount_rate: Decimal = Field(description="WACC for FCFF, cost of equity for FCFE")
     terminal_growth: Decimal
     net_debt: Decimal = Decimal("0")
     diluted_shares: Decimal = Field(gt=0)
@@ -112,6 +123,10 @@ class PublicDCFRequest(BaseModel):
         if self.market is not None:
             self.market = self.market.strip().upper() or None
         self.currency = self.currency.strip().upper()
+        if not self.symbol:
+            raise ValueError("symbol must not be blank")
+        if not self.currency:
+            raise ValueError("currency must not be blank")
         return self
 
 
