@@ -257,6 +257,18 @@ class PostgresAuditRepository(AuditRepository):
                 minute_start = now.replace(second=0, microsecond=0)
                 day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
+                # Keep the ledger bounded. Only the current minute and current UTC
+                # day can influence admission, so older windows are safe to remove.
+                await conn.execute(
+                    """
+                    DELETE FROM api_usage_windows
+                    WHERE (window_kind='minute' AND window_start < $1)
+                       OR (window_kind='day' AND window_start < $2)
+                    """,
+                    minute_start,
+                    day_start,
+                )
+
                 await conn.executemany(
                     """
                     INSERT INTO api_usage_windows (
