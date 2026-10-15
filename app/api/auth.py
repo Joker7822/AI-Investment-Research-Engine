@@ -16,6 +16,7 @@ from app.core.settings import Settings
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REQUEST_ID_RE = re.compile(r"^req_([0-9a-f]{16})_([0-9a-f]{16})$")
+_LOCAL_CLIENT_ID = "local-development"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ def configured_api_principals(settings: Settings) -> tuple[AuthPrincipal, ...]:
             raise ValueError(
                 "PUBLIC_API_CLIENT_KEYS client_id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"
             )
+        if client_id == _LOCAL_CLIENT_ID:
+            raise ValueError("PUBLIC_API_CLIENT_KEYS cannot use the reserved local-development client_id")
         key_hash = _validate_key_hash(raw_hash)
         existing = principals_by_hash.get(key_hash)
         if existing is not None and existing.client_id != client_id:
@@ -93,7 +96,7 @@ def authenticate_api_key(
 ) -> AuthPrincipal:
     principals = configured_api_principals(settings)
     if not principals:
-        return AuthPrincipal(client_id="local-development", key_hash="auth-disabled")
+        return AuthPrincipal(client_id=_LOCAL_CLIENT_ID, key_hash="auth-disabled")
 
     if not api_key:
         code = "UNAUTHORIZED" if public_contract else "missing_api_key"
@@ -123,7 +126,7 @@ def new_client_request_id(client_id: str) -> str:
 
 
 def request_id_belongs_to_client(request_id: str, client_id: str) -> bool:
-    if client_id == "local-development":
+    if client_id == _LOCAL_CLIENT_ID:
         return True
     match = _REQUEST_ID_RE.fullmatch(request_id)
     return bool(match and hmac.compare_digest(match.group(1), client_request_namespace(client_id)))
