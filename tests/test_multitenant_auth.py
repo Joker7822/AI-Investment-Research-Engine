@@ -10,6 +10,7 @@ from app.api.auth import (
     request_id_belongs_to_client,
 )
 from app.api.idempotency import scoped_idempotency_key_hash
+from app.api.main import require_api_key
 from app.api.public_v1 import require_public_api_key
 from app.core.settings import Settings
 from app.main import app
@@ -111,6 +112,22 @@ def test_public_report_endpoint_hides_cross_client_report_ids():
     assert body["error"]["message"] == "Report was not found"
 
 
+def test_legacy_report_endpoint_cannot_bypass_client_isolation():
+    owner = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
+    other = AuthPrincipal(client_id="client-b", key_hash="b" * 64)
+    request_id = new_client_request_id(owner.client_id)
+
+    app.dependency_overrides[require_api_key] = lambda: other
+    try:
+        response = TestClient(app).get(f"/v1/reports/{request_id}")
+    finally:
+        app.dependency_overrides.pop(require_api_key, None)
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "report_not_found"
+
+
 def test_public_research_validates_raw_idempotency_key_before_scoping():
     principal = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
     app.dependency_overrides[require_public_api_key] = lambda: principal
@@ -126,4 +143,4 @@ def test_public_research_validates_raw_idempotency_key_before_scoping():
     assert response.status_code == 400
     body = response.json()
     assert body["error"]["code"] == "INVALID_REQUEST"
-    assert "between 8 and 200" in body["error"]["message"]
+    assert body["error"]["message"] == "Request could not be accepted"
