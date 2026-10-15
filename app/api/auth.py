@@ -15,7 +15,7 @@ from app.core.settings import Settings
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_REQUEST_ID_RE = re.compile(r"^req_([0-9a-f]{16})_([0-9a-f]{16})$")
+_REQUEST_ID_RE = re.compile(r"^req_([0-9a-f]{32})_([0-9a-f]{32})$")
 _LOCAL_CLIENT_ID = "local-development"
 
 
@@ -118,11 +118,11 @@ def authenticate_api_key(
 
 
 def client_request_namespace(client_id: str) -> str:
-    return hashlib.sha256(f"request-owner:{client_id}".encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(f"request-owner:{client_id}".encode("utf-8")).hexdigest()[:32]
 
 
 def new_client_request_id(client_id: str) -> str:
-    return f"req_{client_request_namespace(client_id)}_{uuid.uuid4().hex[:16]}"
+    return f"req_{client_request_namespace(client_id)}_{uuid.uuid4().hex}"
 
 
 def request_id_belongs_to_client(request_id: str, client_id: str) -> bool:
