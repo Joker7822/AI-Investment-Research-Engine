@@ -27,6 +27,21 @@ def test_root_serves_browser_research_app():
     assert head.status_code == 200
 
 
+def test_root_web_app_preserves_mobile_ux_contract():
+    client = TestClient(app)
+    body = client.get("/").text
+
+    assert "viewport-fit=cover" in body
+    assert "env(safe-area-inset-bottom)" in body
+    assert "env(safe-area-inset-left)" in body
+    assert "@media (pointer:coarse)" in body
+    assert "scroll-snap-type:x mandatory" in body
+    assert "font-size:16px" in body
+    assert 'id="resultPanel"' in body
+    assert "revealResultOnMobile" in body
+    assert "scrollIntoView({behavior:'smooth', block:'start'})" in body
+
+
 def test_machine_readable_metadata_prefers_public_api_entrypoints():
     client = TestClient(app)
     response = client.get("/api/v1/meta")
