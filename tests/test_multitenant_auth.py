@@ -1,0 +1,87 @@
+from fastapi.testclient import TestClient
+
+from app.api.auth import (
+    AuthPrincipal,
+    authenticate_api_key,
+    configured_api_principals,
+    hash_api_key,
+    new_client_request_id,
+    request_id_belongs_to_client,
+)
+from app.api.idempotency import scoped_idempotency_key_hash
+from app.api.public_v1 import require_public_api_key
+from app.core.settings import Settings
+from app.main import app
+
+
+def test_explicit_client_mapping_supports_key_rotation():
+    key_one = "tenant-key-one"
+    key_two = "tenant-key-two"
+    settings = Settings(
+        _env_file=None,
+        public_api_key_hashes=None,
+        public_api_client_keys=(
+            f"acme={hash_api_key(key_one)},"
+            f"acme={hash_api_key(key_two)}"
+        ),
+    )
+
+    principals = configured_api_principals(settings)
+    assert len(principals) == 2
+    assert {principal.client_id for principal in principals} == {"acme"}
+    assert authenticate_api_key(settings, key_one).client_id == "acme"
+    assert authenticate_api_key(settings, key_two).client_id == "acme"
+
+
+def test_legacy_hash_configuration_gets_stable_pseudonymous_client():
+    secret = "legacy-production-key"
+    settings = Settings(
+        _env_file=None,
+        public_api_key_hashes=hash_api_key(secret),
+        public_api_client_keys=None,
+    )
+
+    first = authenticate_api_key(settings, secret)
+    second = authenticate_api_key(settings, secret)
+    assert first.client_id == second.client_id
+    assert first.client_id.startswith("legacy_")
+    assert secret not in first.client_id
+    assert first.key_hash == hash_api_key(secret)
+
+
+def test_request_ids_are_bound_to_client_namespace():
+    first_id = new_client_request_id("client-a")
+    second_id = new_client_request_id("client-b")
+
+    assert request_id_belongs_to_client(first_id, "client-a") is True
+    assert request_id_belongs_to_client(first_id, "client-b") is False
+    assert request_id_belongs_to_client(second_id, "client-b") is True
+    assert request_id_belongs_to_client(second_id, "client-a") is False
+
+
+def test_idempotency_key_hashes_are_scoped_per_client():
+    raw_key = "same-idempotency-key"
+    first = scoped_idempotency_key_hash("client-a", raw_key)
+    second = scoped_idempotency_key_hash("client-b", raw_key)
+    repeated = scoped_idempotency_key_hash("client-a", raw_key)
+
+    assert first != second
+    assert first == repeated
+    assert len(first) == 64
+
+
+def test_public_report_endpoint_hides_cross_client_report_ids():
+    owner = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
+    other = AuthPrincipal(client_id="client-b", key_hash="b" * 64)
+    request_id = new_client_request_id(owner.client_id)
+
+    app.dependency_overrides[require_public_api_key] = lambda: other
+    try:
+        response = TestClient(app).get(f"/api/v1/reports/{request_id}")
+    finally:
+        app.dependency_overrides.pop(require_public_api_key, None)
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "REPORT_NOT_FOUND"
+    assert body["error"]["message"] == "Report was not found"
