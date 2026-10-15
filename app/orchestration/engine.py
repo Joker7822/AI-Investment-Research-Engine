@@ -11,7 +11,7 @@ from agents import Agent, trace
 from app.core.settings import Settings
 from app.domain.prompts import CIO_PROMPT
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport, Stance
-from app.orchestration.model_runtime import ModelRuntime
+from app.orchestration.model_runtime import ModelProviderMode, ModelRuntime, current_model_provider
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter, RoutePlan
 from app.orchestration.scoring import aggregate_scores
@@ -47,6 +47,8 @@ class InvestmentAnalysisEngine:
         agent_id: str,
         req: AnalysisRequest,
         prior_results: list[AgentAnalysis] | None = None,
+        *,
+        model_provider: ModelProviderMode = "auto",
     ) -> AgentAnalysis:
         payload = {
             "request": req.model_dump(mode="json"),
@@ -64,6 +66,7 @@ class InvestmentAnalysisEngine:
             result = await self.model_runtime.run(
                 build_agent,
                 json.dumps(payload, ensure_ascii=False),
+                provider=model_provider,
             )
         parsed = result.final_output
         if not isinstance(parsed, AgentAnalysis):
@@ -77,8 +80,13 @@ class InvestmentAnalysisEngine:
         ids: tuple[str, ...],
         req: AnalysisRequest,
         prior: list[AgentAnalysis] | None = None,
+        *,
+        model_provider: ModelProviderMode = "auto",
     ) -> list[AgentAnalysis]:
-        tasks = [self._run_agent(agent_id, req, prior) for agent_id in ids]
+        tasks = [
+            self._run_agent(agent_id, req, prior, model_provider=model_provider)
+            for agent_id in ids
+        ]
         settled = await asyncio.gather(*tasks, return_exceptions=True)
         outputs: list[AgentAnalysis] = []
         for agent_id, item in zip(ids, settled, strict=True):
@@ -110,21 +118,45 @@ class InvestmentAnalysisEngine:
             kwargs["model"] = self.settings.openai_agent_model
         return Agent(**kwargs)
 
-    async def analyze(self, req: AnalysisRequest) -> EngineResult:
+    async def analyze(
+        self,
+        req: AnalysisRequest,
+        *,
+        model_provider: ModelProviderMode = "auto",
+    ) -> EngineResult:
         req = await self.provider.enrich(req)
         request_id = req.request_id or f"req_{uuid.uuid4().hex[:12]}"
         req = req.model_copy(update={"request_id": request_id})
         route = self.router.route(req)
+        effective_provider = current_model_provider(model_provider)
 
+        # A custom-only run should not create OpenAI traces. Auto mode retains
+        # tracing for the primary OpenAI path; custom fallback Runner calls disable
+        # tracing individually inside ModelRuntime.
         with trace(
             "investment_analysis",
             group_id=request_id,
             metadata={"ticker": req.asset.ticker, "as_of": req.as_of.isoformat()},
+            disabled=effective_provider == "custom",
         ):
-            specialists = await self._run_parallel(route.specialists, req)
-            verifiers = await self._run_parallel(route.verifiers, req, specialists)
+            specialists = await self._run_parallel(
+                route.specialists,
+                req,
+                model_provider=effective_provider,
+            )
+            verifiers = await self._run_parallel(
+                route.verifiers,
+                req,
+                specialists,
+                model_provider=effective_provider,
+            )
             verified_context = specialists + verifiers
-            critics = await self._run_parallel(route.critics, req, verified_context)
+            critics = await self._run_parallel(
+                route.critics,
+                req,
+                verified_context,
+                model_provider=effective_provider,
+            )
             pre_cio = verified_context + critics
 
             aggregate = aggregate_scores(specialists)
@@ -143,6 +175,7 @@ class InvestmentAnalysisEngine:
             cio_result = await self.model_runtime.run(
                 self._build_cio_agent,
                 json.dumps(cio_input, ensure_ascii=False),
+                provider=effective_provider,
             )
             judgement = cio_result.final_output
             if not isinstance(judgement, CIOJudgement):
