@@ -9,10 +9,13 @@ from openai import BadRequestError, RateLimitError
 from app.core.settings import Settings
 from app.orchestration import model_runtime as runtime_module
 from app.orchestration.model_runtime import (
+    ModelProviderUnavailableError,
     ModelRuntime,
     custom_llm_configured,
+    current_model_provider,
     model_runtime_configured,
     primary_provider_unavailable,
+    use_model_provider,
 )
 
 
@@ -66,14 +69,22 @@ def test_primary_unavailable_classification_does_not_retry_bad_requests():
     assert primary_provider_unavailable(_bad_request_error()) is False
 
 
+def test_request_scoped_provider_override_is_restored():
+    assert current_model_provider() == "auto"
+    with use_model_provider("custom"):
+        assert current_model_provider() == "custom"
+        assert current_model_provider("openai") == "openai"
+    assert current_model_provider() == "auto"
+
+
 @pytest.mark.asyncio
 async def test_runtime_fails_over_after_primary_rate_limit_and_opens_circuit(monkeypatch):
     settings = _settings()
     runtime = ModelRuntime(settings)
-    calls: list[object] = []
+    calls: list[tuple[object, object | None]] = []
 
-    async def fake_run(agent, input_text):
-        calls.append(agent)
+    async def fake_run(agent, input_text, **kwargs):
+        calls.append((agent, kwargs.get("run_config")))
         if len(calls) == 1:
             raise _rate_limit_error()
         return SimpleNamespace(final_output="ok")
@@ -88,7 +99,9 @@ async def test_runtime_fails_over_after_primary_rate_limit_and_opens_circuit(mon
 
     assert first.final_output == "ok"
     assert second.final_output == "ok"
-    assert calls == ["primary", "fallback", "fallback"]
+    assert [item[0] for item in calls] == ["primary", "fallback", "fallback"]
+    assert calls[1][1].tracing_disabled is True
+    assert calls[2][1].tracing_disabled is True
 
 
 @pytest.mark.asyncio
@@ -96,7 +109,7 @@ async def test_runtime_keeps_primary_when_primary_succeeds(monkeypatch):
     runtime = ModelRuntime(_settings())
     calls: list[object] = []
 
-    async def fake_run(agent, input_text):
+    async def fake_run(agent, input_text, **kwargs):
         calls.append(agent)
         return SimpleNamespace(final_output="primary-ok")
 
@@ -111,12 +124,71 @@ async def test_runtime_keeps_primary_when_primary_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_forced_openai_never_falls_back(monkeypatch):
+    runtime = ModelRuntime(_settings())
+    calls: list[object] = []
+
+    async def fake_run(agent, input_text, **kwargs):
+        calls.append(agent)
+        raise _rate_limit_error()
+
+    monkeypatch.setattr(runtime_module.Runner, "run", fake_run)
+
+    def build_agent(model_override):
+        return "primary" if model_override is None else "fallback"
+
+    with pytest.raises(RateLimitError):
+        await runtime.run(build_agent, "payload", provider="openai")
+    assert calls == ["primary"]
+
+
+@pytest.mark.asyncio
+async def test_forced_custom_never_calls_primary_and_disables_tracing(monkeypatch):
+    runtime = ModelRuntime(_settings())
+    calls: list[tuple[object, object | None]] = []
+
+    async def fake_run(agent, input_text, **kwargs):
+        calls.append((agent, kwargs.get("run_config")))
+        return SimpleNamespace(final_output="custom-ok")
+
+    monkeypatch.setattr(runtime_module.Runner, "run", fake_run)
+
+    def build_agent(model_override):
+        return "primary" if model_override is None else "fallback"
+
+    result = await runtime.run(build_agent, "payload", provider="custom")
+    assert result.final_output == "custom-ok"
+    assert calls[0][0] == "fallback"
+    assert calls[0][1].tracing_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_custom_override_controls_auto_mode(monkeypatch):
+    runtime = ModelRuntime(_settings())
+    calls: list[object] = []
+
+    async def fake_run(agent, input_text, **kwargs):
+        calls.append(agent)
+        return SimpleNamespace(final_output="custom-ok")
+
+    monkeypatch.setattr(runtime_module.Runner, "run", fake_run)
+
+    def build_agent(model_override):
+        return "primary" if model_override is None else "fallback"
+
+    with use_model_provider("custom"):
+        result = await runtime.run(build_agent, "payload")
+    assert result.final_output == "custom-ok"
+    assert calls == ["fallback"]
+
+
+@pytest.mark.asyncio
 async def test_fallback_only_runtime_never_calls_primary(monkeypatch):
     monkeypatch.setattr(runtime_module, "set_tracing_disabled", lambda **kwargs: None)
     runtime = ModelRuntime(_settings(openai_api_key=None))
     calls: list[object] = []
 
-    async def fake_run(agent, input_text):
+    async def fake_run(agent, input_text, **kwargs):
         calls.append(agent)
         return SimpleNamespace(final_output="fallback-ok")
 
@@ -128,3 +200,16 @@ async def test_fallback_only_runtime_never_calls_primary(monkeypatch):
     result = await runtime.run(build_agent, "payload")
     assert result.final_output == "fallback-ok"
     assert calls == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_forced_unconfigured_provider_fails_explicitly(monkeypatch):
+    monkeypatch.setattr(runtime_module, "set_tracing_disabled", lambda **kwargs: None)
+    runtime = ModelRuntime(_settings(openai_api_key=None))
+
+    def build_agent(model_override):
+        return "primary" if model_override is None else "fallback"
+
+    with pytest.raises(ModelProviderUnavailableError) as exc_info:
+        await runtime.run(build_agent, "payload", provider="openai")
+    assert exc_info.value.provider == "openai"
