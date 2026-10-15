@@ -11,7 +11,7 @@ from agents import Agent, trace
 from app.core.settings import Settings
 from app.domain.prompts import CIO_PROMPT
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport, Stance
-from app.orchestration.model_runtime import ModelProviderMode, ModelRuntime
+from app.orchestration.model_runtime import ModelProviderMode, ModelRuntime, current_model_provider
 from app.orchestration.registry import AgentRegistry
 from app.orchestration.router import DeterministicRouter, RoutePlan
 from app.orchestration.scoring import aggregate_scores
@@ -128,6 +128,7 @@ class InvestmentAnalysisEngine:
         request_id = req.request_id or f"req_{uuid.uuid4().hex[:12]}"
         req = req.model_copy(update={"request_id": request_id})
         route = self.router.route(req)
+        effective_provider = current_model_provider(model_provider)
 
         # A custom-only run should not create OpenAI traces. Auto mode retains
         # tracing for the primary OpenAI path; custom fallback Runner calls disable
@@ -136,25 +137,25 @@ class InvestmentAnalysisEngine:
             "investment_analysis",
             group_id=request_id,
             metadata={"ticker": req.asset.ticker, "as_of": req.as_of.isoformat()},
-            disabled=model_provider == "custom",
+            disabled=effective_provider == "custom",
         ):
             specialists = await self._run_parallel(
                 route.specialists,
                 req,
-                model_provider=model_provider,
+                model_provider=effective_provider,
             )
             verifiers = await self._run_parallel(
                 route.verifiers,
                 req,
                 specialists,
-                model_provider=model_provider,
+                model_provider=effective_provider,
             )
             verified_context = specialists + verifiers
             critics = await self._run_parallel(
                 route.critics,
                 req,
                 verified_context,
-                model_provider=model_provider,
+                model_provider=effective_provider,
             )
             pre_cio = verified_context + critics
 
@@ -174,7 +175,7 @@ class InvestmentAnalysisEngine:
             cio_result = await self.model_runtime.run(
                 self._build_cio_agent,
                 json.dumps(cio_input, ensure_ascii=False),
-                provider=model_provider,
+                provider=effective_provider,
             )
             judgement = cio_result.final_output
             if not isinstance(judgement, CIOJudgement):
