@@ -122,6 +122,19 @@ def test_usage_rejects_single_request_above_agent_cap_before_window_limits():
     assert decision.retry_after_seconds is None
 
 
+def test_daily_work_unit_ceiling_is_intrinsic_when_below_request_cap():
+    decision = evaluate_research_usage(
+        _limits(work_units_per_day=20, max_work_units_per_request=36),
+        ResearchUsageCounters(),
+        21,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "request_work_unit_limit"
+    assert decision.limit == 20
+    assert decision.retry_after_seconds is None
+
+
 def test_per_request_agent_cap_is_non_retryable_invalid_request():
     decision = evaluate_research_usage(
         _limits(max_work_units_per_request=30),
@@ -157,11 +170,13 @@ def test_settings_default_to_bounded_research_usage():
     assert settings.api_research_max_agents_per_request == 36
 
 
-def test_usage_reservation_expires_obsolete_windows():
+def test_usage_cleanup_is_after_admission_transaction_with_grace():
     source = inspect.getsource(PostgresAuditRepository.reserve_research_usage)
-    assert "DELETE FROM api_usage_windows" in source
-    assert "window_kind='minute' AND window_start < $1" in source
-    assert "window_kind='day' AND window_start < $2" in source
+    transaction_end = source.index("# Cleanup is intentionally outside the admission transaction")
+    delete_pos = source.index("DELETE FROM api_usage_windows")
+    assert delete_pos > transaction_end
+    assert "interval '5 minutes'" in source
+    assert "interval '1 day'" in source
 
 
 @pytest.mark.asyncio
