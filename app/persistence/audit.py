@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -20,6 +21,9 @@ from app.core.usage import (
 )
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport
 from app.orchestration.router import RoutePlan
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -324,20 +328,22 @@ class PostgresAuditRepository(AuditRepository):
                         work_units,
                     )
 
-            # Cleanup is intentionally outside the admission transaction. It never
-            # holds the current day/minute admission locks while waiting on stale
-            # rows, preventing a minute-boundary lock-order cycle. Grace intervals
-            # also avoid contending with admissions that began shortly before a
-            # boundary but have not committed yet.
-            await conn.execute(
-                """
-                DELETE FROM api_usage_windows
-                WHERE (window_kind='minute' AND window_start < $1 - interval '5 minutes')
-                   OR (window_kind='day' AND window_start < $2 - interval '1 day')
-                """,
-                minute_start,
-                day_start,
-            )
+            # Cleanup is maintenance only: quota admission has already committed.
+            # Never fail a successfully admitted request because stale-row cleanup
+            # was blocked or timed out. Grace intervals avoid contending with
+            # admissions that began shortly before a time-window boundary.
+            try:
+                await conn.execute(
+                    """
+                    DELETE FROM api_usage_windows
+                    WHERE (window_kind='minute' AND window_start < $1 - interval '5 minutes')
+                       OR (window_kind='day' AND window_start < $2 - interval '1 day')
+                    """,
+                    minute_start,
+                    day_start,
+                )
+            except Exception:
+                logger.warning("Usage-window cleanup failed after admission commit", exc_info=True)
             return decision
 
     async def save(
