@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +35,14 @@ class Settings(BaseSettings):
     # multiple key hashes to the same client_id.
     public_api_client_keys: str | None = None
     api_docs_enabled: bool = True
+
+    # Per-client research admission controls. A work unit is one selected agent
+    # execution. Zero disables a window quota; the per-request agent cap stays on.
+    api_research_rate_limit_per_minute: int = Field(default=3, ge=0)
+    api_research_daily_request_quota: int = Field(default=24, ge=0)
+    api_research_daily_agent_quota: int = Field(default=600, ge=0)
+    api_research_max_agents_per_request: int = Field(default=36, ge=1)
+
     # When enabled, startup fails unless DB connectivity, OpenAI configuration,
     # and public API authentication are all production-ready.
     strict_startup_readiness: bool = False
