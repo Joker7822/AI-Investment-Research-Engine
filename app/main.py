@@ -2,22 +2,28 @@ import logging
 from pathlib import Path
 
 from fastapi import Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from openai import RateLimitError
 
 from app.api.auth import configured_api_key_hashes
 from app.api.main import app, audit_repository, settings
+from app.api.public_v1 import public_router
 
 
 logger = logging.getLogger(__name__)
 _WEB_APP = Path(__file__).resolve().parent / "web" / "index.html"
+app.include_router(public_router)
 
 
 def _metadata_payload() -> dict:
     links = {
         "web_app": "/",
-        "health": "/v1/health",
+        "health": "/api/v1/health",
+        "meta": "/api/v1/meta",
         "readiness": "/v1/ready",
+        "public_api_base": "/api/v1",
     }
     if settings.api_docs_enabled:
         links["docs"] = "/docs"
@@ -31,10 +37,14 @@ def _metadata_payload() -> dict:
         "message": "Investment Research API is running",
         "links": links,
         "endpoints": {
-            "research": "POST /v1/research",
-            "valuation": "POST /v1/valuation",
-            "route": "POST /v1/route",
-            "report": "GET /v1/reports/{request_id}",
+            "research": "POST /api/v1/research",
+            "valuation_dcf": "POST /api/v1/valuation/dcf",
+            "route": "POST /api/v1/route",
+            "report": "GET /api/v1/reports/{request_id}",
+        },
+        "compatibility": {
+            "legacy_base": "/v1",
+            "status": "supported",
         },
     }
 
@@ -74,9 +84,26 @@ async def web_app_head() -> Response:
 
 
 @app.get("/v1/meta", include_in_schema=False)
+@app.get("/api/v1/meta", include_in_schema=False)
 async def api_metadata() -> JSONResponse:
-    """Machine-readable landing metadata retained for API clients."""
+    """Machine-readable landing metadata for public clients and legacy compatibility."""
     return JSONResponse(content=_metadata_payload())
+
+
+@app.exception_handler(RequestValidationError)
+async def public_aware_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    public_request = request.url.path.startswith("/api/v1/")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "code": "INVALID_REQUEST" if public_request else "validation_error",
+                "message": "Request validation failed",
+                "request_id": getattr(request.state, "correlation_id", None),
+                "details": jsonable_encoder(exc.errors()),
+            }
+        },
+    )
 
 
 def _quota_exhausted(exc: RateLimitError) -> bool:
@@ -99,14 +126,18 @@ def _quota_exhausted(exc: RateLimitError) -> bool:
 
 @app.exception_handler(RateLimitError)
 async def openai_rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
-    """Expose actionable provider availability without leaking provider payloads or secrets."""
-    exhausted = _quota_exhausted(exc)
-    code = "agent_provider_quota_exhausted" if exhausted else "agent_provider_rate_limited"
-    message = (
-        "AI analysis is temporarily unavailable because provider credits are exhausted"
-        if exhausted
-        else "AI analysis is temporarily unavailable because the provider is rate limiting requests"
-    )
+    """Expose public capacity errors without leaking provider-specific payloads."""
+    if request.url.path.startswith("/api/v1/"):
+        code = "AI_CAPACITY_UNAVAILABLE"
+        message = "AI analysis is temporarily unavailable"
+    else:
+        exhausted = _quota_exhausted(exc)
+        code = "agent_provider_quota_exhausted" if exhausted else "agent_provider_rate_limited"
+        message = (
+            "AI analysis is temporarily unavailable because provider credits are exhausted"
+            if exhausted
+            else "AI analysis is temporarily unavailable because the provider is rate limiting requests"
+        )
     logger.warning("OpenAI request unavailable: code=%s", code)
     request_id = getattr(request.state, "correlation_id", None)
     return JSONResponse(

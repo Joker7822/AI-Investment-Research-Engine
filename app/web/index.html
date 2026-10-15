@@ -10,13 +10,13 @@
     * { box-sizing:border-box; }
     body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at top left,#172554 0,transparent 36%),var(--bg); color:var(--text); }
     a { color:var(--accent); }
-    button,input,textarea,select { font:inherit; }
+    button,input,textarea { font:inherit; }
     button { cursor:pointer; }
     .shell { max-width:1180px; margin:0 auto; padding:28px 18px 64px; }
     header { display:flex; gap:16px; align-items:flex-start; justify-content:space-between; margin-bottom:22px; }
     h1 { margin:0 0 6px; font-size:clamp(26px,4vw,42px); letter-spacing:-.03em; }
     .lead { color:var(--muted); margin:0; max-width:760px; line-height:1.6; }
-    .toplinks { display:flex; gap:8px; flex-wrap:wrap; }
+    .toplinks,.actions,.checks { display:flex; gap:8px; flex-wrap:wrap; }
     .pill,.status { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); background:rgba(18,26,45,.8); color:var(--muted); border-radius:999px; padding:8px 11px; text-decoration:none; font-size:13px; }
     .grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:18px; }
     .card { background:rgba(18,26,45,.92); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:var(--shadow); backdrop-filter:blur(10px); }
@@ -24,15 +24,14 @@
     h2 { margin:0 0 14px; font-size:18px; }
     .hint { color:var(--muted); font-size:13px; line-height:1.55; margin:4px 0 14px; }
     label { display:block; font-size:13px; color:var(--muted); margin:0 0 6px; }
-    input,textarea,select { width:100%; border:1px solid var(--line); border-radius:11px; padding:11px 12px; background:#0d1527; color:var(--text); outline:none; }
-    input:focus,textarea:focus,select:focus { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.12); }
+    input,textarea { width:100%; border:1px solid var(--line); border-radius:11px; padding:11px 12px; background:#0d1527; color:var(--text); outline:none; }
+    input:focus,textarea:focus { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.12); }
     textarea { min-height:92px; resize:vertical; }
     .row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
     .row4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
-    .checks { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 16px; }
+    .checks { margin:8px 0 16px; }
     .check { display:flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:999px; padding:8px 10px; background:#0d1527; color:var(--text); font-size:13px; }
     .check input { width:auto; margin:0; }
-    .actions { display:flex; flex-wrap:wrap; gap:9px; }
     .btn { border:1px solid var(--line); border-radius:11px; padding:10px 13px; background:var(--panel2); color:var(--text); font-weight:650; }
     .btn.primary { background:#0ea5e9; border-color:#0ea5e9; color:#03111a; }
     .btn.good { background:#22c55e; border-color:#22c55e; color:#04150b; }
@@ -55,11 +54,11 @@
     <header>
       <div>
         <h1>Investment Research</h1>
-        <p class="lead">100の専門エージェントから必要な役割だけを選び、検証・批判・CIO統合までをブラウザから実行します。</p>
+        <p class="lead">独自 Public API v1 を通して、銘柄分析・エージェント選定・DCFをブラウザから実行します。内部のOpenAIやAgent実装には依存しない外部仕様です。</p>
       </div>
       <div class="toplinks">
-        <a class="pill" href="/docs" target="_blank" rel="noopener">Swagger</a>
-        <a class="pill" href="/v1/health" target="_blank" rel="noopener">Health</a>
+        <a class="pill" href="/docs" target="_blank" rel="noopener">API Docs</a>
+        <a class="pill" href="/api/v1/health" target="_blank" rel="noopener">Public Health</a>
       </div>
     </header>
 
@@ -67,7 +66,7 @@
       <section>
         <div class="card">
           <h2>1. APIキー</h2>
-          <p class="hint security">キーはこのページから同一オリジンのAPIへ送るだけです。「このタブに保存」を選んだ場合も sessionStorage のみを使い、サーバー側には保存しません。</p>
+          <p class="hint security">キーは同一オリジンの独自APIへだけ送信します。「このタブに保存」を選んでも sessionStorage のみを使い、サーバー側には保存しません。</p>
           <div class="keyline">
             <input id="apiKey" type="password" autocomplete="off" placeholder="X-API-Key">
             <button id="toggleKey" class="btn" type="button">表示</button>
@@ -77,16 +76,20 @@
         </div>
 
         <div class="card">
-          <h2>2. 分析対象</h2>
+          <h2>2. 投資分析</h2>
           <div class="row4">
-            <div><label for="ticker">Ticker</label><input id="ticker" value="AAPL"></div>
-            <div><label for="exchange">Exchange</label><input id="exchange" value="NASDAQ"></div>
+            <div><label for="ticker">Symbol</label><input id="ticker" value="AAPL"></div>
+            <div><label for="exchange">Market</label><input id="exchange" value="NASDAQ"></div>
             <div><label for="currency">Currency</label><input id="currency" value="USD"></div>
             <div><label for="region">Region</label><input id="region" value="US"></div>
           </div>
+          <div class="row">
+            <div><label for="horizon">Horizon</label><input id="horizon" value="12m"></div>
+            <div></div>
+          </div>
           <label for="question">投資判断で知りたいこと</label>
           <textarea id="question">Analyze Apple as an investment over the next 12 months</textarea>
-          <label>分析領域</label>
+          <label>Modules</label>
           <div class="checks" id="analysisTypes">
             <label class="check"><input type="checkbox" value="fundamental" checked> Fundamental</label>
             <label class="check"><input type="checkbox" value="valuation" checked> Valuation</label>
@@ -97,20 +100,20 @@
           </div>
           <div class="actions">
             <button class="btn" id="healthBtn" type="button">接続確認</button>
-            <button class="btn" id="routeBtn" type="button">エージェント選定</button>
+            <button class="btn" id="routeBtn" type="button">分析構成を確認</button>
             <button class="btn primary" id="researchBtn" type="button">AI投資分析を実行</button>
           </div>
         </div>
 
         <div class="card">
           <h2>3. DCFクイック試算</h2>
-          <p class="hint">AIを使わない決定論的なFCFF DCFです。明示した仮定だけで計算します。</p>
+          <p class="hint">独自 `/api/v1/valuation/dcf` を使う、AI非依存の決定論的FCFF DCFです。</p>
           <div class="row">
             <div><label for="baseFcf">Base FCF</label><input id="baseFcf" value="100"></div>
             <div><label for="growthRates">Growth rates（カンマ区切り）</label><input id="growthRates" value="0.10,0.08,0.06"></div>
           </div>
           <div class="row4">
-            <div><label for="wacc">WACC</label><input id="wacc" value="0.10"></div>
+            <div><label for="wacc">Discount rate</label><input id="wacc" value="0.10"></div>
             <div><label for="terminalGrowth">Terminal growth</label><input id="terminalGrowth" value="0.02"></div>
             <div><label for="netDebt">Net debt</label><input id="netDebt" value="20"></div>
             <div><label for="shares">Diluted shares</label><input id="shares" value="10"></div>
@@ -140,7 +143,7 @@
       </aside>
     </div>
 
-    <footer>Investment Research API v1 · <a href="/v1/meta">API metadata</a></footer>
+    <footer>Investment Research Public API v1 · <a href="/v1/meta">API metadata</a></footer>
   </main>
 
   <script>
@@ -172,33 +175,34 @@
         return value;
       }
 
-      function analysisRequest() {
-        const asset = {
-          type: 'equity',
-          ticker: $('ticker').value.trim().toUpperCase(),
-          currency: $('currency').value.trim().toUpperCase(),
-          region: $('region').value.trim().toUpperCase()
+      function publicResearchRequest() {
+        const modules = [...document.querySelectorAll('#analysisTypes input:checked')].map(x => x.value);
+        const body = {
+          symbol: $('ticker').value.trim().toUpperCase(),
+          question: $('question').value.trim(),
+          horizon: $('horizon').value.trim() || '12m',
+          modules,
+          as_of: new Date().toISOString()
         };
-        const exchange = $('exchange').value.trim().toUpperCase();
-        if (exchange) asset.exchange = exchange;
-        const analysisTypes = [...document.querySelectorAll('#analysisTypes input:checked')].map(x => x.value);
-        return {
-          as_of: new Date().toISOString(),
-          asset,
-          user_question: $('question').value.trim(),
-          analysis_types: analysisTypes
-        };
+        const market = $('exchange').value.trim().toUpperCase();
+        const currency = $('currency').value.trim().toUpperCase();
+        const region = $('region').value.trim().toUpperCase();
+        if (market) body.market = market;
+        if (currency) body.currency = currency;
+        if (region) body.region = region;
+        return body;
       }
 
       function friendlyError(response, payload) {
-        const error = payload && payload.error;
-        const code = error && error.code;
-        if (response.status === 401) return '認証できません。APIキーを確認してください。';
-        if (response.status === 422) return '入力値に問題があります。下の詳細を確認してください。';
-        if (code === 'agent_provider_quota_exhausted') return 'AIプロバイダの利用残高が不足しています。OpenAI APIのBillingでクレジットを追加してください。';
-        if (code === 'agent_provider_rate_limited') return 'AIプロバイダが一時的にレート制限しています。';
-        if (code === 'internal_error') return 'サーバー内部エラーです。Request IDを使ってログを追跡できます。';
-        return error?.message || `HTTP ${response.status}`;
+        const code = payload?.error?.code;
+        if (response.status === 401 || code === 'UNAUTHORIZED') return '認証できません。APIキーを確認してください。';
+        if (code === 'INVALID_REQUEST') return '入力値に問題があります。下の詳細を確認してください。';
+        if (code === 'AI_CAPACITY_UNAVAILABLE') return 'AI分析基盤を現在利用できません。OpenAI APIの残高・利用上限を確認してください。';
+        if (code === 'DATA_UNAVAILABLE') return '分析に必要なデータ基盤を現在利用できません。';
+        if (code === 'RATE_LIMITED') return '同じ分析が処理中、または一時的に利用が集中しています。';
+        if (code === 'REPORT_NOT_FOUND') return '指定したレポートが見つかりません。';
+        if (code === 'ANALYSIS_FAILED' || code === 'INTERNAL_ERROR') return '分析処理に失敗しました。Request IDでログを追跡できます。';
+        return payload?.error?.message || `HTTP ${response.status}`;
       }
 
       async function callApi(path, {method='GET', body=null, needsKey=false, headers={}}={}) {
@@ -253,33 +257,33 @@
       });
       $('rememberKey').addEventListener('change', () => { if (!$('rememberKey').checked) sessionStorage.removeItem('investmentResearchApiKey'); });
 
-      $('healthBtn').addEventListener('click', () => callApi('/v1/health'));
-      $('routeBtn').addEventListener('click', () => callApi('/v1/route', {method:'POST', body:analysisRequest(), needsKey:true}));
+      $('healthBtn').addEventListener('click', () => callApi('/api/v1/health'));
+      $('routeBtn').addEventListener('click', () => callApi('/api/v1/route', {method:'POST', body:publicResearchRequest(), needsKey:true}));
       $('researchBtn').addEventListener('click', () => {
         const ticker = $('ticker').value.trim().toLowerCase() || 'research';
         const suffix = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        callApi('/v1/research', {
-          method:'POST', body:analysisRequest(), needsKey:true,
+        callApi('/api/v1/research', {
+          method:'POST', body:publicResearchRequest(), needsKey:true,
           headers:{'Idempotency-Key':`${ticker}-${suffix}`}
         });
       });
       $('valuationBtn').addEventListener('click', () => {
-        const req = analysisRequest();
+        const req = publicResearchRequest();
         const growth = $('growthRates').value.split(',').map(x => x.trim()).filter(Boolean);
-        callApi('/v1/valuation', {
+        callApi('/api/v1/valuation/dcf', {
           method:'POST', needsKey:true,
           body:{
+            symbol:req.symbol,
+            market:req.market,
+            currency:req.currency || 'USD',
             as_of:req.as_of,
-            asset:req.asset,
-            assumptions:{
-              dcf:[{
-                name:'base', currency:req.asset.currency || 'USD', cash_flow_basis:'fcff',
-                base_fcf:$('baseFcf').value.trim(), growth_rates:growth,
-                wacc:$('wacc').value.trim(), terminal_growth:$('terminalGrowth').value.trim(),
-                net_debt:$('netDebt').value.trim(), diluted_shares:$('shares').value.trim()
-              }],
-              multiples:[]
-            }
+            cash_flow_basis:'fcff',
+            base_fcf:$('baseFcf').value.trim(),
+            growth_rates:growth,
+            discount_rate:$('wacc').value.trim(),
+            terminal_growth:$('terminalGrowth').value.trim(),
+            net_debt:$('netDebt').value.trim(),
+            diluted_shares:$('shares').value.trim()
           }
         });
       });
@@ -293,7 +297,9 @@
         const blob = new Blob([JSON.stringify(lastJson, null, 2)], {type:'application/json'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = `investment-research-${Date.now()}.json`; a.click();
+        a.href = url;
+        a.download = `investment-research-${Date.now()}.json`;
+        a.click();
         URL.revokeObjectURL(url);
       });
     })();
