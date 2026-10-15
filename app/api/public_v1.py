@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from openai import OpenAIError, RateLimitError
 from pydantic import ValidationError
 
-from app.api.auth import api_key_header, configured_api_key_hashes, hash_api_key
+from app.api.auth import AuthPrincipal, api_key_header, authenticate_api_key
 from app.api.main import (
     get_report as internal_get_report,
     research as internal_research,
@@ -40,25 +39,13 @@ from app.domain.schemas import (
 
 logger = logging.getLogger(__name__)
 public_router = APIRouter(prefix="/api/v1", tags=["public"])
-_PUBLIC_API_KEY_HASHES = configured_api_key_hashes(settings)
 
 
-async def require_public_api_key(api_key: str | None = Security(api_key_header)) -> str:
-    """Stable public authentication contract, independent of internal error names."""
-    if not _PUBLIC_API_KEY_HASHES:
-        return "auth-disabled"
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-API-Key is required"},
-        )
-    candidate = hash_api_key(api_key)
-    if not any(hmac.compare_digest(candidate, allowed) for allowed in _PUBLIC_API_KEY_HASHES):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "API key is invalid"},
-        )
-    return candidate
+async def require_public_api_key(
+    api_key: str | None = Security(api_key_header),
+) -> AuthPrincipal:
+    """Authenticate a public API key and resolve its stable client identity."""
+    return authenticate_api_key(settings, api_key, public_contract=True)
 
 
 def _asset(payload: PublicResearchRequest | PublicDCFRequest) -> AssetRef:
@@ -120,6 +107,7 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "request_in_progress": "RATE_LIMITED",
         "invalid_idempotency_key": "INVALID_REQUEST",
         "missing_idempotency_key": "INVALID_REQUEST",
+        "invalid_request_id": "INVALID_REQUEST",
     }
     public_code = mapping.get(internal_code, "ANALYSIS_FAILED")
     messages = {
@@ -159,7 +147,7 @@ async def public_health() -> PublicHealthResponse:
 @public_router.post("/route", response_model=PublicRouteResponse)
 async def public_route(
     payload: PublicResearchRequest,
-    _: str = Depends(require_public_api_key),
+    _: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicRouteResponse:
     try:
         plan = internal_router.route(_analysis_request(payload))
@@ -182,7 +170,7 @@ async def public_route(
 async def public_research(
     payload: PublicResearchRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
     stable_key = idempotency_key or f"public-{uuid.uuid4().hex}"
     try:
@@ -205,7 +193,7 @@ async def public_research(
 @public_router.get("/reports/{request_id}", response_model=PublicResearchResponse)
 async def public_report(
     request_id: str,
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
     try:
         result = await internal_get_report(request_id, principal)
@@ -226,7 +214,7 @@ async def public_report(
 @public_router.post("/valuation/dcf", response_model=PublicDCFResponse)
 async def public_dcf(
     payload: PublicDCFRequest,
-    principal: str = Depends(require_public_api_key),
+    principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicDCFResponse:
     as_of = payload.as_of or datetime.now(timezone.utc)
     scenario_kwargs = {
