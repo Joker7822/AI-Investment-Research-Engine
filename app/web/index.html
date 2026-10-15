@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Investment Research</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#121a2d; --panel2:#182238; --text:#edf2ff; --muted:#9eabc3; --line:#26334d; --accent:#7dd3fc; --good:#86efac; --warn:#fde68a; --bad:#fca5a5; --shadow:0 18px 50px rgba(0,0,0,.24); }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at top left,#172554 0,transparent 36%),var(--bg); color:var(--text); }
+    a { color:var(--accent); }
+    button,input,textarea,select { font:inherit; }
+    button { cursor:pointer; }
+    .shell { max-width:1180px; margin:0 auto; padding:28px 18px 64px; }
+    header { display:flex; gap:16px; align-items:flex-start; justify-content:space-between; margin-bottom:22px; }
+    h1 { margin:0 0 6px; font-size:clamp(26px,4vw,42px); letter-spacing:-.03em; }
+    .lead { color:var(--muted); margin:0; max-width:760px; line-height:1.6; }
+    .toplinks { display:flex; gap:8px; flex-wrap:wrap; }
+    .pill,.status { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); background:rgba(18,26,45,.8); color:var(--muted); border-radius:999px; padding:8px 11px; text-decoration:none; font-size:13px; }
+    .grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:18px; }
+    .card { background:rgba(18,26,45,.92); border:1px solid var(--line); border-radius:18px; padding:18px; box-shadow:var(--shadow); backdrop-filter:blur(10px); }
+    .card + .card { margin-top:18px; }
+    h2 { margin:0 0 14px; font-size:18px; }
+    .hint { color:var(--muted); font-size:13px; line-height:1.55; margin:4px 0 14px; }
+    label { display:block; font-size:13px; color:var(--muted); margin:0 0 6px; }
+    input,textarea,select { width:100%; border:1px solid var(--line); border-radius:11px; padding:11px 12px; background:#0d1527; color:var(--text); outline:none; }
+    input:focus,textarea:focus,select:focus { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.12); }
+    textarea { min-height:92px; resize:vertical; }
+    .row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+    .row4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
+    .checks { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 16px; }
+    .check { display:flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:999px; padding:8px 10px; background:#0d1527; color:var(--text); font-size:13px; }
+    .check input { width:auto; margin:0; }
+    .actions { display:flex; flex-wrap:wrap; gap:9px; }
+    .btn { border:1px solid var(--line); border-radius:11px; padding:10px 13px; background:var(--panel2); color:var(--text); font-weight:650; }
+    .btn.primary { background:#0ea5e9; border-color:#0ea5e9; color:#03111a; }
+    .btn.good { background:#22c55e; border-color:#22c55e; color:#04150b; }
+    .btn:disabled { opacity:.55; cursor:wait; }
+    .keyline { display:grid; grid-template-columns:1fr auto auto; gap:8px; }
+    .security { border-left:3px solid var(--accent); padding-left:10px; }
+    .resultbar { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }
+    pre { margin:0; min-height:280px; max-height:720px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#080d18; border:1px solid var(--line); border-radius:13px; padding:14px; color:#dce7ff; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .ok { color:var(--good); } .warning { color:var(--warn); } .error { color:var(--bad); }
+    .mini { font-size:12px; color:var(--muted); }
+    details { margin-top:12px; }
+    summary { cursor:pointer; color:var(--accent); font-size:13px; }
+    footer { color:var(--muted); text-align:center; margin-top:26px; font-size:12px; }
+    @media (max-width:860px) { .grid { grid-template-columns:1fr; } header { flex-direction:column; } .row4 { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:560px) { .row,.row4 { grid-template-columns:1fr; } .keyline { grid-template-columns:1fr auto; } .keyline .clear { grid-column:1/-1; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>Investment Research</h1>
+        <p class="lead">100の専門エージェントから必要な役割だけを選び、検証・批判・CIO統合までをブラウザから実行します。</p>
+      </div>
+      <div class="toplinks">
+        <a class="pill" href="/docs" target="_blank" rel="noopener">Swagger</a>
+        <a class="pill" href="/v1/health" target="_blank" rel="noopener">Health</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section>
+        <div class="card">
+          <h2>1. APIキー</h2>
+          <p class="hint security">キーはこのページから同一オリジンのAPIへ送るだけです。「このタブに保存」を選んだ場合も sessionStorage のみを使い、サーバー側には保存しません。</p>
+          <div class="keyline">
+            <input id="apiKey" type="password" autocomplete="off" placeholder="X-API-Key">
+            <button id="toggleKey" class="btn" type="button">表示</button>
+            <button id="clearKey" class="btn clear" type="button">消去</button>
+          </div>
+          <label class="check" style="display:inline-flex;margin-top:10px"><input id="rememberKey" type="checkbox" checked> このタブに保存</label>
+        </div>
+
+        <div class="card">
+          <h2>2. 分析対象</h2>
+          <div class="row4">
+            <div><label for="ticker">Ticker</label><input id="ticker" value="AAPL"></div>
+            <div><label for="exchange">Exchange</label><input id="exchange" value="NASDAQ"></div>
+            <div><label for="currency">Currency</label><input id="currency" value="USD"></div>
+            <div><label for="region">Region</label><input id="region" value="US"></div>
+          </div>
+          <label for="question">投資判断で知りたいこと</label>
+          <textarea id="question">Analyze Apple as an investment over the next 12 months</textarea>
+          <label>分析領域</label>
+          <div class="checks" id="analysisTypes">
+            <label class="check"><input type="checkbox" value="fundamental" checked> Fundamental</label>
+            <label class="check"><input type="checkbox" value="valuation" checked> Valuation</label>
+            <label class="check"><input type="checkbox" value="risk" checked> Risk</label>
+            <label class="check"><input type="checkbox" value="market" checked> Market</label>
+            <label class="check"><input type="checkbox" value="macro"> Macro</label>
+            <label class="check"><input type="checkbox" value="scenario"> Scenario</label>
+          </div>
+          <div class="actions">
+            <button class="btn" id="healthBtn" type="button">接続確認</button>
+            <button class="btn" id="routeBtn" type="button">エージェント選定</button>
+            <button class="btn primary" id="researchBtn" type="button">AI投資分析を実行</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>3. DCFクイック試算</h2>
+          <p class="hint">AIを使わない決定論的なFCFF DCFです。明示した仮定だけで計算します。</p>
+          <div class="row">
+            <div><label for="baseFcf">Base FCF</label><input id="baseFcf" value="100"></div>
+            <div><label for="growthRates">Growth rates（カンマ区切り）</label><input id="growthRates" value="0.10,0.08,0.06"></div>
+          </div>
+          <div class="row4">
+            <div><label for="wacc">WACC</label><input id="wacc" value="0.10"></div>
+            <div><label for="terminalGrowth">Terminal growth</label><input id="terminalGrowth" value="0.02"></div>
+            <div><label for="netDebt">Net debt</label><input id="netDebt" value="20"></div>
+            <div><label for="shares">Diluted shares</label><input id="shares" value="10"></div>
+          </div>
+          <button class="btn good" id="valuationBtn" type="button">DCFを計算</button>
+        </div>
+      </section>
+
+      <aside>
+        <div class="card">
+          <div class="resultbar">
+            <div>
+              <h2 style="margin-bottom:4px">結果</h2>
+              <span id="status" class="status">待機中</span>
+            </div>
+            <div class="actions">
+              <button class="btn" id="copyBtn" type="button">コピー</button>
+              <button class="btn" id="downloadBtn" type="button">JSON保存</button>
+            </div>
+          </div>
+          <pre id="result">ここに結果が表示されます。</pre>
+          <details>
+            <summary>実行情報</summary>
+            <p class="mini" id="meta">まだ実行されていません。</p>
+          </details>
+        </div>
+      </aside>
+    </div>
+
+    <footer>Investment Research API v1 · <a href="/v1/meta">API metadata</a></footer>
+  </main>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const result = $('result');
+      const statusEl = $('status');
+      const meta = $('meta');
+      let lastJson = null;
+      let busy = false;
+
+      const saved = sessionStorage.getItem('investmentResearchApiKey');
+      if (saved) $('apiKey').value = saved;
+
+      function setStatus(text, cls='') {
+        statusEl.textContent = text;
+        statusEl.className = `status ${cls}`.trim();
+      }
+
+      function setBusy(value) {
+        busy = value;
+        ['healthBtn','routeBtn','researchBtn','valuationBtn'].forEach(id => $(id).disabled = value);
+      }
+
+      function apiKey() {
+        const value = $('apiKey').value.trim();
+        if ($('rememberKey').checked && value) sessionStorage.setItem('investmentResearchApiKey', value);
+        else sessionStorage.removeItem('investmentResearchApiKey');
+        return value;
+      }
+
+      function analysisRequest() {
+        const asset = {
+          type: 'equity',
+          ticker: $('ticker').value.trim().toUpperCase(),
+          currency: $('currency').value.trim().toUpperCase(),
+          region: $('region').value.trim().toUpperCase()
+        };
+        const exchange = $('exchange').value.trim().toUpperCase();
+        if (exchange) asset.exchange = exchange;
+        const analysisTypes = [...document.querySelectorAll('#analysisTypes input:checked')].map(x => x.value);
+        return {
+          as_of: new Date().toISOString(),
+          asset,
+          user_question: $('question').value.trim(),
+          analysis_types: analysisTypes
+        };
+      }
+
+      function friendlyError(response, payload) {
+        const error = payload && payload.error;
+        const code = error && error.code;
+        if (response.status === 401) return '認証できません。APIキーを確認してください。';
+        if (response.status === 422) return '入力値に問題があります。下の詳細を確認してください。';
+        if (code === 'agent_provider_quota_exhausted') return 'AIプロバイダの利用残高が不足しています。OpenAI APIのBillingでクレジットを追加してください。';
+        if (code === 'agent_provider_rate_limited') return 'AIプロバイダが一時的にレート制限しています。';
+        if (code === 'internal_error') return 'サーバー内部エラーです。Request IDを使ってログを追跡できます。';
+        return error?.message || `HTTP ${response.status}`;
+      }
+
+      async function callApi(path, {method='GET', body=null, needsKey=false, headers={}}={}) {
+        if (busy) return;
+        const key = needsKey ? apiKey() : '';
+        if (needsKey && !key) {
+          setStatus('APIキー未入力', 'warning');
+          result.textContent = 'APIキーを入力してください。';
+          return;
+        }
+        setBusy(true);
+        setStatus('実行中…');
+        result.textContent = 'リクエストを実行しています…';
+        const started = performance.now();
+        try {
+          const requestHeaders = {'Accept':'application/json', ...headers};
+          if (needsKey) requestHeaders['X-API-Key'] = key;
+          if (body !== null) requestHeaders['Content-Type'] = 'application/json';
+          const response = await fetch(path, {method, headers:requestHeaders, body:body === null ? undefined : JSON.stringify(body)});
+          const contentType = response.headers.get('content-type') || '';
+          const payload = contentType.includes('application/json') ? await response.json() : {message: await response.text()};
+          lastJson = payload;
+          result.textContent = JSON.stringify(payload, null, 2);
+          const elapsed = Math.round(performance.now() - started);
+          const requestId = response.headers.get('x-request-id') || payload?.error?.request_id || payload?.request_id || '-';
+          meta.textContent = `${method} ${path} · HTTP ${response.status} · ${elapsed} ms · Request ID: ${requestId}`;
+          if (response.ok) setStatus(`成功 ${response.status}`, 'ok');
+          else {
+            setStatus(`エラー ${response.status}`, 'error');
+            result.textContent = `${friendlyError(response, payload)}\n\n${JSON.stringify(payload, null, 2)}`;
+          }
+        } catch (err) {
+          lastJson = {error:String(err)};
+          setStatus('通信エラー', 'error');
+          result.textContent = `通信に失敗しました。\n${String(err)}`;
+          meta.textContent = `${method} ${path}`;
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      $('toggleKey').addEventListener('click', () => {
+        const field = $('apiKey');
+        const show = field.type === 'password';
+        field.type = show ? 'text' : 'password';
+        $('toggleKey').textContent = show ? '隠す' : '表示';
+      });
+      $('clearKey').addEventListener('click', () => {
+        $('apiKey').value = '';
+        sessionStorage.removeItem('investmentResearchApiKey');
+        setStatus('キー消去済み');
+      });
+      $('rememberKey').addEventListener('change', () => { if (!$('rememberKey').checked) sessionStorage.removeItem('investmentResearchApiKey'); });
+
+      $('healthBtn').addEventListener('click', () => callApi('/v1/health'));
+      $('routeBtn').addEventListener('click', () => callApi('/v1/route', {method:'POST', body:analysisRequest(), needsKey:true}));
+      $('researchBtn').addEventListener('click', () => {
+        const ticker = $('ticker').value.trim().toLowerCase() || 'research';
+        const suffix = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        callApi('/v1/research', {
+          method:'POST', body:analysisRequest(), needsKey:true,
+          headers:{'Idempotency-Key':`${ticker}-${suffix}`}
+        });
+      });
+      $('valuationBtn').addEventListener('click', () => {
+        const req = analysisRequest();
+        const growth = $('growthRates').value.split(',').map(x => x.trim()).filter(Boolean);
+        callApi('/v1/valuation', {
+          method:'POST', needsKey:true,
+          body:{
+            as_of:req.as_of,
+            asset:req.asset,
+            assumptions:{
+              dcf:[{
+                name:'base', currency:req.asset.currency || 'USD', cash_flow_basis:'fcff',
+                base_fcf:$('baseFcf').value.trim(), growth_rates:growth,
+                wacc:$('wacc').value.trim(), terminal_growth:$('terminalGrowth').value.trim(),
+                net_debt:$('netDebt').value.trim(), diluted_shares:$('shares').value.trim()
+              }],
+              multiples:[]
+            }
+          }
+        });
+      });
+
+      $('copyBtn').addEventListener('click', async () => {
+        await navigator.clipboard.writeText(result.textContent);
+        setStatus('コピーしました', 'ok');
+      });
+      $('downloadBtn').addEventListener('click', () => {
+        if (!lastJson) return;
+        const blob = new Blob([JSON.stringify(lastJson, null, 2)], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `investment-research-${Date.now()}.json`; a.click();
+        URL.revokeObjectURL(url);
+      });
+    })();
+  </script>
+</body>
+</html>
