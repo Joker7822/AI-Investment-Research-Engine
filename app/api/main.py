@@ -101,7 +101,9 @@ audit_repository = (
 
 def _legacy_report_ids_allowed() -> bool:
     principals = configured_api_principals(settings)
-    return len({principal.client_id for principal in principals}) == 1
+    # No configured key hashes is the documented auth-disabled local-development
+    # mode, which is effectively a single client as well.
+    return len({principal.client_id for principal in principals}) <= 1
 
 
 def _is_legacy_public_request_id(request_id: str) -> bool:
@@ -122,10 +124,10 @@ def _principal_can_access_request_id(principal: AuthPrincipal, request_id: str) 
 
 def _idempotency_key_hash(principal: AuthPrincipal, normalized_key: str) -> str:
     # Pre-tenant idempotency rows contain only sha256(normalized_key), so there is
-    # no safe way to assign them among multiple clients. While exactly one client
-    # exists, retain that namespace to preserve replay/conflict semantics. The
-    # moment multiple distinct clients are configured, switch to client-scoped
-    # hashes so tenants cannot collide on the same caller-provided key.
+    # no safe way to assign them among multiple clients. While zero configured
+    # clients (auth-disabled local development) or exactly one client exists,
+    # retain that namespace to preserve replay/conflict semantics. The moment
+    # multiple distinct clients are configured, switch to client-scoped hashes.
     if _legacy_report_ids_allowed():
         return hash_idempotency_key(normalized_key)
     return scoped_idempotency_key_hash(principal.client_id, normalized_key)
