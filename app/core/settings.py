@@ -52,8 +52,8 @@ class Settings(BaseSettings):
     api_research_daily_agent_quota: int = Field(default=600, ge=0)
     api_research_max_agents_per_request: int = Field(default=36, ge=1)
 
-    # When enabled, startup fails unless DB connectivity, at least one model
-    # runtime (OpenAI or the custom fallback), and public API auth are ready.
+    # Production startup still requires the primary OpenAI credential; the custom
+    # model gateway is a runtime failover when that configured primary is unusable.
     strict_startup_readiness: bool = False
 
     model_config = SettingsConfigDict(
