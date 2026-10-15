@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Literal
 
 from agents import OpenAIChatCompletionsModel, RunConfig, Runner, set_tracing_disabled
@@ -22,6 +24,10 @@ from app.core.settings import Settings
 logger = logging.getLogger(__name__)
 
 ModelProviderMode = Literal["auto", "openai", "custom"]
+_model_provider_override: ContextVar[ModelProviderMode] = ContextVar(
+    "model_provider_override",
+    default="auto",
+)
 
 
 class ModelProviderUnavailableError(RuntimeError):
@@ -30,6 +36,16 @@ class ModelProviderUnavailableError(RuntimeError):
     def __init__(self, provider: ModelProviderMode):
         super().__init__(f"AI provider is unavailable: {provider}")
         self.provider = provider
+
+
+@contextmanager
+def use_model_provider(provider: ModelProviderMode) -> Iterator[None]:
+    """Apply one provider selection to the current async request context."""
+    token = _model_provider_override.set(provider)
+    try:
+        yield
+    finally:
+        _model_provider_override.reset(token)
 
 
 def custom_llm_configured(settings: Settings) -> bool:
@@ -146,12 +162,17 @@ class ModelRuntime:
         provider: ModelProviderMode = "auto",
     ):
         """Run one agent using the requested provider selection mode."""
-        if provider == "openai":
+        request_override = _model_provider_override.get()
+        effective_provider: ModelProviderMode = (
+            request_override if provider == "auto" and request_override != "auto" else provider
+        )
+
+        if effective_provider == "openai":
             if not self.settings.openai_api_key:
                 raise ModelProviderUnavailableError("openai")
             return await Runner.run(build_agent(None), input_text)
 
-        if provider == "custom":
+        if effective_provider == "custom":
             return await self._run_custom(build_agent, input_text)
 
         if not self.settings.openai_api_key:
