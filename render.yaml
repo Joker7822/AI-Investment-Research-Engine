@@ -31,6 +31,14 @@ services:
         sync: false
       - key: MAX_PARALLEL_AGENTS
         value: "8"
+      - key: API_RESEARCH_RATE_LIMIT_PER_MINUTE
+        value: "3"
+      - key: API_RESEARCH_DAILY_REQUEST_QUOTA
+        value: "24"
+      - key: API_RESEARCH_DAILY_AGENT_QUOTA
+        value: "600"
+      - key: API_RESEARCH_MAX_AGENTS_PER_REQUEST
+        value: "36"
       - key: WEB_CONCURRENCY
         value: "1"
       - key: API_DOCS_ENABLED
