@@ -17,7 +17,6 @@ def test_root_serves_browser_research_app():
     body = response.text
     assert "Investment Research" in body
     assert "AI投資分析を実行" in body
-    assert "/v1/research" in body
     assert "sessionStorage" in body
     assert "localStorage" not in body
 
@@ -25,18 +24,20 @@ def test_root_serves_browser_research_app():
     assert head.status_code == 200
 
 
-def test_machine_readable_metadata_retains_api_entrypoints():
+def test_machine_readable_metadata_prefers_public_api_entrypoints():
     client = TestClient(app)
     response = client.get("/v1/meta")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
     assert body["links"]["web_app"] == "/"
-    assert body["links"]["health"] == "/v1/health"
+    assert body["links"]["health"] == "/api/v1/health"
+    assert body["links"]["public_api_base"] == "/api/v1"
     assert body["links"]["readiness"] == "/v1/ready"
     assert body["links"]["docs"] == "/docs"
-    assert body["endpoints"]["research"] == "POST /v1/research"
-    assert body["endpoints"]["valuation"] == "POST /v1/valuation"
+    assert body["endpoints"]["research"] == "POST /api/v1/research"
+    assert body["endpoints"]["valuation_dcf"] == "POST /api/v1/valuation/dcf"
+    assert body["compatibility"]["legacy_base"] == "/v1"
 
 
 def test_openai_quota_exhaustion_is_detected_without_exposing_provider_payload():
