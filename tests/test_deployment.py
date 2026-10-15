@@ -76,6 +76,11 @@ def test_render_blueprint_wires_production_dependencies():
     env = {item["key"]: item for item in web["envVars"]}
     assert env["DATABASE_URL"]["fromDatabase"]["name"] == "investment-research-db"
     assert env["OPENAI_API_KEY"]["sync"] is False
+    assert env["CUSTOM_LLM_BASE_URL"]["sync"] is False
+    assert env["CUSTOM_LLM_API_KEY"]["sync"] is False
+    assert env["CUSTOM_LLM_MODEL"]["sync"] is False
+    assert env["CUSTOM_LLM_TIMEOUT_SECONDS"]["value"] == "90"
+    assert env["CUSTOM_LLM_FAILOVER_COOLDOWN_SECONDS"]["value"] == "60"
     assert env["PUBLIC_API_KEY_HASHES"]["sync"] is False
     assert env["STRICT_STARTUP_READINESS"]["value"] == "true"
     assert env["API_RESEARCH_RATE_LIMIT_PER_MINUTE"]["value"] == "3"
