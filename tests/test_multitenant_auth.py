@@ -119,6 +119,17 @@ def test_single_client_cutover_preserves_legacy_idempotency_namespace(monkeypatc
     )
 
 
+def test_auth_disabled_mode_preserves_legacy_idempotency_namespace(monkeypatch):
+    principal = AuthPrincipal(client_id="local-development", key_hash="auth-disabled")
+    normalized_key = "existing-local-retry-key"
+
+    monkeypatch.setattr(api_main, "configured_api_principals", lambda _settings: ())
+    assert api_main._legacy_report_ids_allowed() is True
+    assert api_main._idempotency_key_hash(principal, normalized_key) == hash_idempotency_key(
+        normalized_key
+    )
+
+
 def test_public_report_endpoint_hides_cross_client_report_ids():
     owner = AuthPrincipal(client_id="client-a", key_hash="a" * 64)
     other = AuthPrincipal(client_id="client-b", key_hash="b" * 64)
