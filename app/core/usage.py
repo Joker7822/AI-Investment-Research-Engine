@@ -72,10 +72,11 @@ def evaluate_research_usage(
         raise ValueError("work_units must be non-negative")
     current_time = now or datetime.now(timezone.utc)
 
-    if (
-        limits.max_work_units_per_request > 0
-        and work_units > limits.max_work_units_per_request
-    ):
+    intrinsic_limits = [limits.max_work_units_per_request]
+    if limits.work_units_per_day > 0:
+        intrinsic_limits.append(limits.work_units_per_day)
+    intrinsic_work_unit_limit = min(intrinsic_limits)
+    if work_units > intrinsic_work_unit_limit:
         return ResearchUsageDecision(
             allowed=False,
             reason="request_work_unit_limit",
@@ -83,7 +84,7 @@ def evaluate_research_usage(
             minute_requests=counters.minute_requests,
             daily_requests=counters.daily_requests,
             daily_work_units=counters.daily_work_units,
-            limit=limits.max_work_units_per_request,
+            limit=intrinsic_work_unit_limit,
         )
 
     violations: list[tuple[int, UsageLimitReason, int]] = []
