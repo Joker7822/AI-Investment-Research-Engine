@@ -189,7 +189,6 @@ class PostgresAuditRepository(AuditRepository):
                     key_hash,
                 )
                 if row is None:
-                    # Defensive fallback for an unexpected concurrent delete.
                     return IdempotencyReservation("in_progress", None)
                 if row["request_hash"] != request_hash:
                     return IdempotencyReservation("conflict", row["request_id"])
@@ -257,18 +256,6 @@ class PostgresAuditRepository(AuditRepository):
                 minute_start = now.replace(second=0, microsecond=0)
                 day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-                # Keep the ledger bounded. Only the current minute and current UTC
-                # day can influence admission, so older windows are safe to remove.
-                await conn.execute(
-                    """
-                    DELETE FROM api_usage_windows
-                    WHERE (window_kind='minute' AND window_start < $1)
-                       OR (window_kind='day' AND window_start < $2)
-                    """,
-                    minute_start,
-                    day_start,
-                )
-
                 await conn.executemany(
                     """
                     INSERT INTO api_usage_windows (
@@ -314,31 +301,44 @@ class PostgresAuditRepository(AuditRepository):
                     work_units,
                     now=now,
                 )
-                if not decision.allowed:
-                    return decision
+                if decision.allowed:
+                    await conn.execute(
+                        """
+                        UPDATE api_usage_windows
+                        SET request_count=request_count+1, updated_at=now()
+                        WHERE client_id=$1 AND window_kind='minute' AND window_start=$2
+                        """,
+                        client_id,
+                        minute_start,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE api_usage_windows
+                        SET request_count=request_count+1,
+                            work_units=work_units+$3,
+                            updated_at=now()
+                        WHERE client_id=$1 AND window_kind='day' AND window_start=$2
+                        """,
+                        client_id,
+                        day_start,
+                        work_units,
+                    )
 
-                await conn.execute(
-                    """
-                    UPDATE api_usage_windows
-                    SET request_count=request_count+1, updated_at=now()
-                    WHERE client_id=$1 AND window_kind='minute' AND window_start=$2
-                    """,
-                    client_id,
-                    minute_start,
-                )
-                await conn.execute(
-                    """
-                    UPDATE api_usage_windows
-                    SET request_count=request_count+1,
-                        work_units=work_units+$3,
-                        updated_at=now()
-                    WHERE client_id=$1 AND window_kind='day' AND window_start=$2
-                    """,
-                    client_id,
-                    day_start,
-                    work_units,
-                )
-                return decision
+            # Cleanup is intentionally outside the admission transaction. It never
+            # holds the current day/minute admission locks while waiting on stale
+            # rows, preventing a minute-boundary lock-order cycle. Grace intervals
+            # also avoid contending with admissions that began shortly before a
+            # boundary but have not committed yet.
+            await conn.execute(
+                """
+                DELETE FROM api_usage_windows
+                WHERE (window_kind='minute' AND window_start < $1 - interval '5 minutes')
+                   OR (window_kind='day' AND window_start < $2 - interval '1 day')
+                """,
+                minute_start,
+                day_start,
+            )
+            return decision
 
     async def save(
         self,
