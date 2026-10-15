@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 
@@ -47,11 +47,7 @@ def _seconds_until_next_minute(now: datetime) -> int:
 
 def _seconds_until_next_utc_day(now: datetime) -> int:
     utc_now = now.astimezone(timezone.utc)
-    next_day = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    next_day = next_day.replace(day=utc_now.day)  # keep mypy/linters simple before timedelta
-    from datetime import timedelta
-
-    next_day += timedelta(days=1)
+    next_day = utc_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     return max(1, int((next_day - utc_now).total_seconds()))
 
 
@@ -87,7 +83,10 @@ def evaluate_research_usage(
             limit=limits.max_work_units_per_request,
         )
 
-    if limits.requests_per_minute > 0 and counters.minute_requests + 1 > limits.requests_per_minute:
+    if (
+        limits.requests_per_minute > 0
+        and counters.minute_requests + 1 > limits.requests_per_minute
+    ):
         return ResearchUsageDecision(
             allowed=False,
             reason="minute_request_limit",
@@ -111,7 +110,10 @@ def evaluate_research_usage(
             retry_after_seconds=_seconds_until_next_utc_day(current_time),
         )
 
-    if limits.work_units_per_day > 0 and counters.daily_work_units + work_units > limits.work_units_per_day:
+    if (
+        limits.work_units_per_day > 0
+        and counters.daily_work_units + work_units > limits.work_units_per_day
+    ):
         return ResearchUsageDecision(
             allowed=False,
             reason="daily_work_unit_quota",
