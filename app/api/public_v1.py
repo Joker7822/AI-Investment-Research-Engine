@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Security, status
-from openai import RateLimitError
+from openai import OpenAIError, RateLimitError
 from pydantic import ValidationError
 
 from app.api.auth import api_key_header, configured_api_key_hashes, hash_api_key
@@ -121,13 +121,31 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "missing_idempotency_key": "INVALID_REQUEST",
     }
     public_code = mapping.get(internal_code, "ANALYSIS_FAILED")
-    message = str(detail.get("message") or "The request could not be completed")
+    messages = {
+        "DATA_UNAVAILABLE": "Required data services are temporarily unavailable",
+        "AI_CAPACITY_UNAVAILABLE": "AI analysis is temporarily unavailable",
+        "REPORT_NOT_FOUND": "Report was not found",
+        "INVALID_REQUEST": "Request could not be accepted",
+        "RATE_LIMITED": "A matching request is already in progress",
+        "ANALYSIS_FAILED": "Investment analysis failed",
+    }
     return HTTPException(
         status_code=exc.status_code,
         detail={
             "code": public_code,
-            "message": message,
-            "details": detail.get("details"),
+            "message": messages[public_code],
+            "details": detail.get("details") if public_code in {"INVALID_REQUEST", "RATE_LIMITED"} else None,
+        },
+    )
+
+
+def _ai_unavailable(exc: Exception) -> HTTPException:
+    logger.warning("Public research AI dependency unavailable: %s", type(exc).__name__)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "AI_CAPACITY_UNAVAILABLE",
+            "message": "AI analysis is temporarily unavailable",
         },
     )
 
@@ -142,7 +160,14 @@ async def public_route(
     payload: PublicResearchRequest,
     _: str = Depends(require_public_api_key),
 ) -> PublicRouteResponse:
-    plan = internal_router.route(_analysis_request(payload))
+    try:
+        plan = internal_router.route(_analysis_request(payload))
+    except Exception as exc:
+        logger.exception("Public routing failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "ANALYSIS_FAILED", "message": "Analysis routing failed"},
+        ) from exc
     return PublicRouteResponse(
         selected=len(plan.all_agents),
         specialists=len(plan.specialists),
@@ -164,14 +189,9 @@ async def public_research(
     except HTTPException as exc:
         raise _public_http_exception(exc) from exc
     except RateLimitError as exc:
-        logger.warning("Public research unavailable because AI capacity is unavailable")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "AI_CAPACITY_UNAVAILABLE",
-                "message": "AI analysis is temporarily unavailable",
-            },
-        ) from exc
+        raise _ai_unavailable(exc) from exc
+    except OpenAIError as exc:
+        raise _ai_unavailable(exc) from exc
     except Exception as exc:
         logger.exception("Public research failed")
         raise HTTPException(
@@ -190,6 +210,15 @@ async def public_report(
         result = await internal_get_report(request_id, principal)
     except HTTPException as exc:
         raise _public_http_exception(exc) from exc
+    except Exception as exc:
+        logger.exception("Public report retrieval failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_UNAVAILABLE",
+                "message": "Required data services are temporarily unavailable",
+            },
+        ) from exc
     return _public_report(result.report)
 
 
@@ -231,8 +260,16 @@ async def public_dcf(
         asset=_asset(payload),
         assumptions=ValuationAssumptions(dcf=[scenario], multiples=[]),
     )
-    result = await internal_valuation(internal_payload, principal)
-    calculation = result.calculations["dcf"][0]
+    try:
+        result = await internal_valuation(internal_payload, principal)
+        calculation = result.calculations["dcf"][0]
+    except Exception as exc:
+        logger.exception("Public DCF calculation failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "INTERNAL_ERROR", "message": "Valuation calculation failed"},
+        ) from exc
+
     return PublicDCFResponse(
         symbol=payload.symbol,
         as_of=as_of,
