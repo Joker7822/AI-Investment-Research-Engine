@@ -21,6 +21,16 @@ services:
         value: db/schema.sql
       - key: OPENAI_API_KEY
         sync: false
+      - key: CUSTOM_LLM_BASE_URL
+        sync: false
+      - key: CUSTOM_LLM_API_KEY
+        sync: false
+      - key: CUSTOM_LLM_MODEL
+        sync: false
+      - key: CUSTOM_LLM_TIMEOUT_SECONDS
+        value: "90"
+      - key: CUSTOM_LLM_FAILOVER_COOLDOWN_SECONDS
+        value: "60"
       - key: PUBLIC_API_KEY_HASHES
         sync: false
       - key: STRICT_STARTUP_READINESS
