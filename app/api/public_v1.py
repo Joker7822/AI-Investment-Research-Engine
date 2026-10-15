@@ -9,15 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from openai import OpenAIError, RateLimitError
 from pydantic import ValidationError
 
-from app.api.auth import (
-    AuthPrincipal,
-    api_key_header,
-    authenticate_api_key,
-    configured_api_principals,
-    new_client_request_id,
-    request_id_belongs_to_client,
-)
-from app.api.idempotency import scoped_idempotency_key_hash, validate_idempotency_key
+from app.api.auth import AuthPrincipal, api_key_header, authenticate_api_key
 from app.api.main import (
     get_report as internal_get_report,
     research as internal_research,
@@ -47,10 +39,6 @@ from app.domain.schemas import (
 
 logger = logging.getLogger(__name__)
 public_router = APIRouter(prefix="/api/v1", tags=["public"])
-_CONFIGURED_PUBLIC_PRINCIPALS = configured_api_principals(settings)
-_ALLOW_LEGACY_REPORT_IDS = (
-    len({principal.client_id for principal in _CONFIGURED_PUBLIC_PRINCIPALS}) == 1
-)
 
 
 async def require_public_api_key(
@@ -70,13 +58,8 @@ def _asset(payload: PublicResearchRequest | PublicDCFRequest) -> AssetRef:
     )
 
 
-def _analysis_request(
-    payload: PublicResearchRequest,
-    *,
-    request_id: str | None = None,
-) -> AnalysisRequest:
+def _analysis_request(payload: PublicResearchRequest) -> AnalysisRequest:
     return AnalysisRequest(
-        request_id=request_id,
         as_of=payload.as_of or datetime.now(timezone.utc),
         asset=_asset(payload),
         user_question=payload.question,
@@ -124,6 +107,7 @@ def _public_http_exception(exc: HTTPException) -> HTTPException:
         "request_in_progress": "RATE_LIMITED",
         "invalid_idempotency_key": "INVALID_REQUEST",
         "missing_idempotency_key": "INVALID_REQUEST",
+        "invalid_request_id": "INVALID_REQUEST",
     }
     public_code = mapping.get(internal_code, "ANALYSIS_FAILED")
     messages = {
@@ -152,21 +136,6 @@ def _ai_unavailable(exc: Exception) -> HTTPException:
             "code": "AI_CAPACITY_UNAVAILABLE",
             "message": "AI analysis is temporarily unavailable",
         },
-    )
-
-
-def _can_read_report(principal: AuthPrincipal, request_id: str) -> bool:
-    if request_id_belongs_to_client(request_id, principal.client_id):
-        return True
-    if not _ALLOW_LEGACY_REPORT_IDS:
-        return False
-    # Public reports created before tenant isolation used `req_<16 hex>` IDs.
-    parts = request_id.split("_")
-    return (
-        len(parts) == 2
-        and parts[0] == "req"
-        and len(parts[1]) == 16
-        and all(ch in "0123456789abcdef" for ch in parts[1])
     )
 
 
@@ -203,24 +172,9 @@ async def public_research(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
-    client_request_id = new_client_request_id(principal.client_id)
-    if idempotency_key is None:
-        normalized_key = f"public-{uuid.uuid4().hex}"
-    else:
-        try:
-            normalized_key = validate_idempotency_key(idempotency_key)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_REQUEST", "message": str(exc)},
-            ) from exc
-    stable_key = scoped_idempotency_key_hash(principal.client_id, normalized_key)
+    stable_key = idempotency_key or f"public-{uuid.uuid4().hex}"
     try:
-        result = await internal_research(
-            _analysis_request(payload, request_id=client_request_id),
-            stable_key,
-            principal,
-        )
+        result = await internal_research(_analysis_request(payload), stable_key, principal)
     except HTTPException as exc:
         raise _public_http_exception(exc) from exc
     except RateLimitError as exc:
@@ -241,13 +195,6 @@ async def public_report(
     request_id: str,
     principal: AuthPrincipal = Depends(require_public_api_key),
 ) -> PublicResearchResponse:
-    if not _can_read_report(principal, request_id):
-        # Deliberately return the same response as a missing report so callers
-        # cannot enumerate another client's report IDs.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "REPORT_NOT_FOUND", "message": "Report was not found"},
-        )
     try:
         result = await internal_get_report(request_id, principal)
     except HTTPException as exc:
