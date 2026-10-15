@@ -6,11 +6,18 @@ import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import asyncpg
 
+from app.core.usage import (
+    ResearchUsageCounters,
+    ResearchUsageDecision,
+    ResearchUsageLimits,
+    evaluate_research_usage,
+)
 from app.domain.schemas import AnalysisRequest, AgentAnalysis, CIOJudgement, InvestmentReport
 from app.orchestration.router import RoutePlan
 
@@ -59,6 +66,15 @@ class NullAuditRepository(AuditRepository):
     async def release_idempotency(self, key_hash: str, request_hash: str) -> None:
         return None
 
+    async def reserve_research_usage(
+        self,
+        client_id: str,
+        work_units: int,
+        limits: ResearchUsageLimits,
+    ) -> ResearchUsageDecision:
+        del client_id
+        return evaluate_research_usage(limits, ResearchUsageCounters(), work_units)
+
 
 def stage_for_agent(agent_id: str, route: RoutePlan) -> str:
     if agent_id in route.specialists:
@@ -83,7 +99,7 @@ def _hash(value) -> str:
 
 
 class PostgresAuditRepository(AuditRepository):
-    """Persist immutable analysis provenance and public-API idempotency state."""
+    """Persist immutable analysis provenance and public-API admission state."""
 
     def __init__(
         self,
@@ -222,6 +238,92 @@ class PostgresAuditRepository(AuditRepository):
                 key_hash,
                 request_hash,
             )
+
+    async def reserve_research_usage(
+        self,
+        client_id: str,
+        work_units: int,
+        limits: ResearchUsageLimits,
+    ) -> ResearchUsageDecision:
+        """Atomically admit one expensive research request for a client."""
+        now = datetime.now(timezone.utc)
+        minute_start = now.replace(second=0, microsecond=0)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO api_usage_windows (
+                        client_id, window_kind, window_start, request_count, work_units
+                    ) VALUES ($1,$2,$3,0,0)
+                    ON CONFLICT (client_id, window_kind, window_start) DO NOTHING
+                    """,
+                    [
+                        (client_id, "minute", minute_start),
+                        (client_id, "day", day_start),
+                    ],
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT window_kind, request_count, work_units
+                    FROM api_usage_windows
+                    WHERE client_id=$1
+                      AND (
+                        (window_kind='minute' AND window_start=$2)
+                        OR (window_kind='day' AND window_start=$3)
+                      )
+                    ORDER BY window_kind
+                    FOR UPDATE
+                    """,
+                    client_id,
+                    minute_start,
+                    day_start,
+                )
+                by_kind = {str(row["window_kind"]): row for row in rows}
+                minute_row = by_kind.get("minute")
+                day_row = by_kind.get("day")
+                if minute_row is None or day_row is None:
+                    raise RuntimeError("usage window reservation state is incomplete")
+
+                counters = ResearchUsageCounters(
+                    minute_requests=int(minute_row["request_count"]),
+                    daily_requests=int(day_row["request_count"]),
+                    daily_work_units=int(day_row["work_units"]),
+                )
+                decision = evaluate_research_usage(
+                    limits,
+                    counters,
+                    work_units,
+                    now=now,
+                )
+                if not decision.allowed:
+                    return decision
+
+                await conn.execute(
+                    """
+                    UPDATE api_usage_windows
+                    SET request_count=request_count+1, updated_at=now()
+                    WHERE client_id=$1 AND window_kind='minute' AND window_start=$2
+                    """,
+                    client_id,
+                    minute_start,
+                )
+                await conn.execute(
+                    """
+                    UPDATE api_usage_windows
+                    SET request_count=request_count+1,
+                        work_units=work_units+$3,
+                        updated_at=now()
+                    WHERE client_id=$1 AND window_kind='day' AND window_start=$2
+                    """,
+                    client_id,
+                    day_start,
+                    work_units,
+                )
+                return decision
 
     async def save(
         self,
