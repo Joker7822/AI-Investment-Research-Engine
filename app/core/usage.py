@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -42,13 +43,14 @@ class ResearchUsageDecision:
 
 
 def _seconds_until_next_minute(now: datetime) -> int:
-    return max(1, 60 - now.second)
+    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return max(1, math.ceil((next_minute - now).total_seconds()))
 
 
 def _seconds_until_next_utc_day(now: datetime) -> int:
     utc_now = now.astimezone(timezone.utc)
     next_day = utc_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    return max(1, int((next_day - utc_now).total_seconds()))
+    return max(1, math.ceil((next_day - utc_now).total_seconds()))
 
 
 def evaluate_research_usage(
@@ -63,7 +65,8 @@ def evaluate_research_usage(
     A work unit is one selected agent execution. Limits set to zero are disabled,
     except max_work_units_per_request which is expected to be positive by Settings.
     The returned counters are projected values when allowed and current values when
-    denied.
+    denied. When multiple time-window quotas are exhausted, Retry-After uses the
+    longest active reset delay so a conforming client does not retry too early.
     """
     if work_units < 0:
         raise ValueError("work_units must be non-negative")
@@ -83,46 +86,51 @@ def evaluate_research_usage(
             limit=limits.max_work_units_per_request,
         )
 
+    violations: list[tuple[int, UsageLimitReason, int]] = []
     if (
         limits.requests_per_minute > 0
         and counters.minute_requests + 1 > limits.requests_per_minute
     ):
-        return ResearchUsageDecision(
-            allowed=False,
-            reason="minute_request_limit",
-            work_units=work_units,
-            minute_requests=counters.minute_requests,
-            daily_requests=counters.daily_requests,
-            daily_work_units=counters.daily_work_units,
-            limit=limits.requests_per_minute,
-            retry_after_seconds=_seconds_until_next_minute(current_time),
+        violations.append(
+            (
+                _seconds_until_next_minute(current_time),
+                "minute_request_limit",
+                limits.requests_per_minute,
+            )
         )
 
     if limits.requests_per_day > 0 and counters.daily_requests + 1 > limits.requests_per_day:
-        return ResearchUsageDecision(
-            allowed=False,
-            reason="daily_request_quota",
-            work_units=work_units,
-            minute_requests=counters.minute_requests,
-            daily_requests=counters.daily_requests,
-            daily_work_units=counters.daily_work_units,
-            limit=limits.requests_per_day,
-            retry_after_seconds=_seconds_until_next_utc_day(current_time),
+        violations.append(
+            (
+                _seconds_until_next_utc_day(current_time),
+                "daily_request_quota",
+                limits.requests_per_day,
+            )
         )
 
     if (
         limits.work_units_per_day > 0
         and counters.daily_work_units + work_units > limits.work_units_per_day
     ):
+        violations.append(
+            (
+                _seconds_until_next_utc_day(current_time),
+                "daily_work_unit_quota",
+                limits.work_units_per_day,
+            )
+        )
+
+    if violations:
+        retry_after_seconds, reason, limit = max(violations, key=lambda item: item[0])
         return ResearchUsageDecision(
             allowed=False,
-            reason="daily_work_unit_quota",
+            reason=reason,
             work_units=work_units,
             minute_requests=counters.minute_requests,
             daily_requests=counters.daily_requests,
             daily_work_units=counters.daily_work_units,
-            limit=limits.work_units_per_day,
-            retry_after_seconds=_seconds_until_next_utc_day(current_time),
+            limit=limit,
+            retry_after_seconds=retry_after_seconds,
         )
 
     return ResearchUsageDecision(
