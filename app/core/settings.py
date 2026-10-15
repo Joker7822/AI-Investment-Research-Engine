@@ -7,6 +7,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_agent_model: str | None = None
+
+    # Optional operator-controlled OpenAI-compatible fallback model gateway.
+    # All three values must be configured together for failover to activate.
+    custom_llm_base_url: str | None = None
+    custom_llm_api_key: str | None = None
+    custom_llm_model: str | None = None
+    custom_llm_timeout_seconds: float = Field(default=90.0, gt=0)
+    custom_llm_failover_cooldown_seconds: float = Field(default=60.0, ge=0)
+
     max_parallel_agents: int = 8
     agent_config_path: str = "config/agents.yaml"
 
@@ -43,8 +52,8 @@ class Settings(BaseSettings):
     api_research_daily_agent_quota: int = Field(default=600, ge=0)
     api_research_max_agents_per_request: int = Field(default=36, ge=1)
 
-    # When enabled, startup fails unless DB connectivity, OpenAI configuration,
-    # and public API authentication are all production-ready.
+    # Production startup still requires the primary OpenAI credential; the custom
+    # model gateway is a runtime failover when that configured primary is unusable.
     strict_startup_readiness: bool = False
 
     model_config = SettingsConfigDict(

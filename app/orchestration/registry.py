@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -62,7 +63,7 @@ class AgentRegistry:
     def spec(self, agent_id: str) -> AgentSpec:
         return self._specs[agent_id]
 
-    def build(self, agent_id: str, as_of: str):
+    def build(self, agent_id: str, as_of: str, *, model_override: Any | None = None):
         # Lazy import keeps routing/config tests runnable without the runtime SDK installed.
         from agents import Agent
 
@@ -78,6 +79,8 @@ class AgentRegistry:
             "instructions": instructions,
             "output_type": AgentAnalysis,
         }
-        if self.settings.openai_agent_model:
+        if model_override is not None:
+            kwargs["model"] = model_override
+        elif self.settings.openai_agent_model:
             kwargs["model"] = self.settings.openai_agent_model
         return Agent(**kwargs)
